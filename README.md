@@ -11,10 +11,12 @@ Point it at any OpenAPI spec and it will expose every operation as an MCP tool �
 - **Dynamic tool generation** — tools are created from your OpenAPI spec at startup, using `summary`, `description`, `tags`, and `parameters` from the spec.
 - **Flexible spec loading** — accepts a local file path (JSON or YAML) or a remote URL.
 - **Multiple server support** — override the base URL(s) via CLI flags or use the servers defined in the spec.
+- **Config file support** — load OpenAPI source, tool prefix, servers, and auth from a JSON/YAML config file.
 - **Authentication** — supports `none`, `basic`, `bearer`, and `apikey` auth.
 - **Runtime auth updates** — change auth without restarting via the `set_auth` tool.
+- **Tool prefixing** — apply a prefix to built-in and generated tools.
 - **Discovery tool** — list all available tools with filtering by tag or HTTP method.
-- **Setup tool** — inspect the current configuration at any time.
+- **Info/setup tools** — inspect the current configuration, active server, and defined servers at any time.
 
 ---
 
@@ -43,8 +45,10 @@ npx mcp-openapi <options> <openapi-path-or-url>
 mcp-openapi [options] <openapi-path-or-url>
 
 Options:
+  --config <path>             Path to a JSON/YAML config file
   --server <url>              Base URL to use (overrides servers from spec). Can be repeated.
   --server-index <n>          Index of server to use from spec/config (default: 0)
+  --tool-prefix <prefix>      Prefix to add to built-in and generated tool names
   --auth-type <type>          Authentication type: none | basic | bearer | apikey (default: none)
   --auth-username <user>      Username for basic auth
   --auth-password <pass>      Password for basic auth
@@ -93,6 +97,29 @@ npx mcp-openapi ./spec.yaml \
   --auth-type basic \
   --auth-username admin \
   --auth-password secret
+```
+
+### Config file with named servers and prefixed tools
+
+```yaml
+openApiPath: ./openapi.yaml
+toolPrefix: petstore
+serverIndex: 1
+servers:
+  - url: https://sandbox.api.example.com
+    name: sandbox
+    auth:
+      type: bearer
+      token: SANDBOX_TOKEN
+  - url: https://api.example.com
+    name: production
+    auth:
+      type: bearer
+      token: PROD_TOKEN
+```
+
+```bash
+npx mcp-openapi --config ./mcp-openapi.config.yaml
 ```
 
 ### API key in a header
@@ -151,8 +178,11 @@ npx mcp-openapi ./openapi.json \
 | Tool             | Description                                                                                   |
 |------------------|-----------------------------------------------------------------------------------------------|
 | `discover_tools` | List all generated API tools. Optionally filter by `tag` or `method`.                        |
+| `get_info`       | Return the current OpenAPI, tool prefix, active server/auth, and the list of defined servers. |
 | `get_setup`      | Return the current server setup: spec source, base URL, auth type, spec info, and tool count. |
 | `set_auth`       | Update authentication configuration at runtime without restarting the server.                 |
+
+When `--tool-prefix` or `toolPrefix` is set, the same prefix is applied to built-in tools and generated API tools (for example `petstore_get_info` or `petstore_list_pets`).
 
 ---
 

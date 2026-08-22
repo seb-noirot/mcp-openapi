@@ -2,6 +2,7 @@
 
 import { McpOpenApiServer } from "./server";
 import { parseAuthConfig } from "./auth";
+import { loadConfigFile } from "./config";
 import { ServerConfig } from "./types";
 
 function printUsage(): void {
@@ -9,8 +10,10 @@ function printUsage(): void {
 Usage: mcp-openapi [options] <openapi-path-or-url>
 
 Options:
+  --config <path>           Path to a JSON/YAML config file
   --server <url>            Base URL to use (overrides servers from spec). Can be repeated.
   --server-index <n>        Index of server to use from spec/config (default: 0)
+  --tool-prefix <prefix>    Prefix to add to built-in and generated tool names
   --auth-type <type>        Authentication type: none | basic | bearer | apikey (default: none)
   --auth-username <user>    Username for basic auth
   --auth-password <pass>    Password for basic auth
@@ -33,20 +36,27 @@ Examples:
   mcp-openapi ./openapi.json
   mcp-openapi https://api.example.com/openapi.yaml --auth-type bearer --auth-token mytoken
   mcp-openapi ./spec.yaml --server https://api.example.com --auth-type basic --auth-username admin --auth-password secret
+  mcp-openapi --config ./mcp-openapi.config.yaml
 `);
 }
 
 function parseArgs(args: string[]): { config: ServerConfig; remaining: string[] } {
   const servers: string[] = [];
   const remaining: string[] = [];
-  let serverIndex = 0;
-  let openApiPath = "";
+  let serverIndex: number | undefined;
+  let openApiPath: string | undefined;
+  let configPath: string | undefined;
+  let toolPrefix: string | undefined;
 
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--server" && i + 1 < args.length) {
+    if (args[i] === "--config" && i + 1 < args.length) {
+      configPath = args[++i];
+    } else if (args[i] === "--server" && i + 1 < args.length) {
       servers.push(args[++i]);
     } else if (args[i] === "--server-index" && i + 1 < args.length) {
       serverIndex = parseInt(args[++i], 10);
+    } else if (args[i] === "--tool-prefix" && i + 1 < args.length) {
+      toolPrefix = args[++i];
     } else if (
       args[i] === "--auth-type" ||
       args[i] === "--auth-username" ||
@@ -64,13 +74,27 @@ function parseArgs(args: string[]): { config: ServerConfig; remaining: string[] 
     }
   }
 
-  const auth = parseAuthConfig(args);
+  const fileConfig = configPath ? loadConfigFile(configPath) : {};
+  const cliAuth = parseAuthConfig(args, {
+    defaultToNone: false,
+    includeEnvironment: false,
+  });
+  const envAuth = parseAuthConfig([], {
+    defaultToNone: false,
+    includeEnvironment: true,
+  });
+  const auth = cliAuth ?? fileConfig.auth ?? envAuth;
 
   const config: ServerConfig = {
-    openApiPath,
-    auth,
-    ...(servers.length > 0 ? { servers } : {}),
-    serverIndex,
+    openApiPath: openApiPath ?? fileConfig.openApiPath ?? "",
+    ...(auth ? { auth } : {}),
+    ...(servers.length > 0
+      ? { servers: servers.map((url) => ({ url })) }
+      : fileConfig.servers
+        ? { servers: fileConfig.servers }
+        : {}),
+    serverIndex: serverIndex ?? fileConfig.serverIndex ?? 0,
+    toolPrefix: toolPrefix ?? fileConfig.toolPrefix,
   };
 
   return { config, remaining };

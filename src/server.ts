@@ -327,7 +327,7 @@ export class McpOpenApiServer {
     return result;
   }
 
-  private handleGetInfo(): unknown {
+  private getInfoSnapshot(): Record<string, unknown> {
     return {
       openApiSource: this.config.openApiPath,
       toolPrefix: this.toolPrefix,
@@ -346,9 +346,13 @@ export class McpOpenApiServer {
     };
   }
 
-  private handleGetSetup(): unknown {
+  private handleGetInfo(): Record<string, unknown> {
+    return this.getInfoSnapshot();
+  }
+
+  private handleGetSetup(): Record<string, unknown> {
     return {
-      ...this.handleGetInfo(),
+      ...this.getInfoSnapshot(),
       availableServers: this.getDefinedServers().map((server) => server["url"]),
     };
   }

@@ -1,4 +1,10 @@
-import { generateToolName, buildToolDescription, generateTools, buildInputSchema } from "../generator";
+import {
+  generateToolName,
+  buildToolDescription,
+  generateTools,
+  buildInputSchema,
+  normalizeToolPrefix,
+} from "../generator";
 import { OpenApiSpec } from "../types";
 
 describe("generateToolName", () => {
@@ -6,6 +12,18 @@ describe("generateToolName", () => {
     expect(generateToolName("get", "/pets", "listPets")).toBe("list_pets");
     expect(generateToolName("post", "/pets", "createPet")).toBe("create_pet");
     expect(generateToolName("get", "/pets/{id}", "getPetById")).toBe("get_pet_by_id");
+  });
+
+  describe("normalizeToolPrefix", () => {
+    it("should normalize and suffix the prefix", () => {
+      expect(normalizeToolPrefix("PetStore")).toBe("pet_store_");
+      expect(normalizeToolPrefix("pet-store")).toBe("pet_store_");
+    });
+
+    it("should return an empty string when prefix is missing", () => {
+      expect(normalizeToolPrefix(undefined)).toBe("");
+      expect(normalizeToolPrefix("")).toBe("");
+    });
   });
 
   it("should handle operationIds with underscores and hyphens", () => {
@@ -172,6 +190,12 @@ describe("generateTools", () => {
     const names = tools.map((t) => t.name);
     // Names should be unique
     expect(new Set(names).size).toBe(names.length);
+  });
+
+  it("should prefix generated tool names", () => {
+    const tools = generateTools(petStoreSpec, "petstore");
+    expect(tools.map((t) => t.name)).toContain("petstore_list_pets");
+    expect(tools.map((t) => t.name)).toContain("petstore_create_pet");
   });
 });
 

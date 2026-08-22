@@ -3,6 +3,15 @@ import axios, { AxiosInstance, AxiosRequestConfig } from "axios";
 
 interface ParseAuthConfigOptions {
   defaultToNone?: boolean;
+  includeEnvironment?: boolean;
+}
+
+interface ParseAuthConfigRequiredOptions extends ParseAuthConfigOptions {
+  defaultToNone?: true;
+}
+
+interface ParseAuthConfigOptionalOptions extends ParseAuthConfigOptions {
+  defaultToNone: false;
 }
 
 /**
@@ -52,10 +61,21 @@ export function createHttpClient(
  */
 export function parseAuthConfig(
   args: string[],
+  options?: ParseAuthConfigRequiredOptions
+): AuthConfig;
+export function parseAuthConfig(
+  args: string[],
+  options: ParseAuthConfigOptionalOptions
+): AuthConfig | undefined;
+export function parseAuthConfig(
+  args: string[],
   options: ParseAuthConfigOptions = {}
 ): AuthConfig | undefined {
   const defaultToNone = options.defaultToNone ?? true;
-  const authType = getArg(args, "--auth-type") ?? process.env["AUTH_TYPE"];
+  const includeEnvironment = options.includeEnvironment ?? true;
+  const authType =
+    getArg(args, "--auth-type") ??
+    (includeEnvironment ? process.env["AUTH_TYPE"] : undefined);
 
   if (!authType) {
     return defaultToNone ? { type: "none" } : undefined;
@@ -64,28 +84,36 @@ export function parseAuthConfig(
   if (authType === "basic") {
     return {
       type: "basic",
-      username: getArg(args, "--auth-username") ?? process.env["AUTH_USERNAME"],
-      password: getArg(args, "--auth-password") ?? process.env["AUTH_PASSWORD"],
+      username:
+        getArg(args, "--auth-username") ??
+        (includeEnvironment ? process.env["AUTH_USERNAME"] : undefined),
+      password:
+        getArg(args, "--auth-password") ??
+        (includeEnvironment ? process.env["AUTH_PASSWORD"] : undefined),
     };
   }
 
   if (authType === "bearer") {
     return {
       type: "bearer",
-      token: getArg(args, "--auth-token") ?? process.env["AUTH_TOKEN"],
+      token:
+        getArg(args, "--auth-token") ??
+        (includeEnvironment ? process.env["AUTH_TOKEN"] : undefined),
     };
   }
 
   if (authType === "apikey") {
     return {
       type: "apikey",
-      apiKey: getArg(args, "--api-key") ?? process.env["API_KEY"],
+      apiKey:
+        getArg(args, "--api-key") ??
+        (includeEnvironment ? process.env["API_KEY"] : undefined),
       apiKeyHeader:
         getArg(args, "--api-key-header") ??
-        process.env["API_KEY_HEADER"],
+        (includeEnvironment ? process.env["API_KEY_HEADER"] : undefined),
       apiKeyQueryParam:
         getArg(args, "--api-key-query-param") ??
-        process.env["API_KEY_QUERY_PARAM"],
+        (includeEnvironment ? process.env["API_KEY_QUERY_PARAM"] : undefined),
     };
   }
 
