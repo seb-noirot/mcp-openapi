@@ -1,6 +1,10 @@
 import { AuthConfig } from "./types";
 import axios, { AxiosInstance, AxiosRequestConfig } from "axios";
 
+interface ParseAuthConfigOptions {
+  defaultToNone?: boolean;
+}
+
 /**
  * Create an axios instance configured for the given auth and base URL.
  */
@@ -46,8 +50,16 @@ export function createHttpClient(
 /**
  * Parse auth configuration from CLI args or environment variables.
  */
-export function parseAuthConfig(args: string[]): AuthConfig {
-  const authType = getArg(args, "--auth-type") ?? process.env["AUTH_TYPE"] ?? "none";
+export function parseAuthConfig(
+  args: string[],
+  options: ParseAuthConfigOptions = {}
+): AuthConfig | undefined {
+  const defaultToNone = options.defaultToNone ?? true;
+  const authType = getArg(args, "--auth-type") ?? process.env["AUTH_TYPE"];
+
+  if (!authType) {
+    return defaultToNone ? { type: "none" } : undefined;
+  }
 
   if (authType === "basic") {
     return {

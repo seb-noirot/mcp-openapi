@@ -12,11 +12,19 @@ export interface AuthConfig {
   apiKeyQueryParam?: string;
 }
 
+export interface DefinedServerConfig {
+  url: string;
+  name?: string;
+  description?: string;
+  auth?: AuthConfig;
+}
+
 export interface ServerConfig {
   openApiPath: string;
-  servers?: string[];
+  servers?: DefinedServerConfig[];
   auth?: AuthConfig;
   serverIndex?: number;
+  toolPrefix?: string;
 }
 
 export interface OpenApiInfo {

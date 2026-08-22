@@ -8,6 +8,21 @@ import { resolveRef } from "./loader";
 
 const HTTP_METHODS = ["get", "post", "put", "patch", "delete", "head", "options"];
 
+export function normalizeToolPrefix(prefix: string | undefined): string {
+  if (!prefix) {
+    return "";
+  }
+
+  const normalized = prefix
+    .replace(/([A-Z])/g, "_$1")
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "");
+
+  return normalized ? `${normalized}_` : "";
+}
+
 /**
  * Generate an MCP tool name from an operationId or method+path combination.
  */
@@ -213,9 +228,13 @@ export function extractRequestBodySchema(
 /**
  * Generate all MCP tool definitions from an OpenAPI spec.
  */
-export function generateTools(spec: OpenApiSpec): McpToolDefinition[] {
+export function generateTools(
+  spec: OpenApiSpec,
+  toolPrefix?: string
+): McpToolDefinition[] {
   const tools: McpToolDefinition[] = [];
   const usedNames = new Set<string>();
+  const normalizedPrefix = normalizeToolPrefix(toolPrefix);
 
   for (const [path, pathItem] of Object.entries(spec.paths ?? {})) {
     const pathLevelParameters = pathItem.parameters ?? [];
@@ -232,7 +251,7 @@ export function generateTools(spec: OpenApiSpec): McpToolDefinition[] {
         ...(op.parameters ?? []),
       ];
 
-      let name = generateToolName(method, path, op.operationId);
+      let name = `${normalizedPrefix}${generateToolName(method, path, op.operationId)}`;
 
       // Deduplicate names
       if (usedNames.has(name)) {

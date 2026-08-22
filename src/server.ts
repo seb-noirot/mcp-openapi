@@ -6,13 +6,25 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { AxiosInstance } from "axios";
 import { loadOpenApiSpec } from "./loader";
-import { generateTools, buildInputSchema, extractRequestBodySchema } from "./generator";
+import {
+  generateTools,
+  buildInputSchema,
+  extractRequestBodySchema,
+  normalizeToolPrefix,
+} from "./generator";
 import { createHttpClient } from "./auth";
 import { executeToolCall } from "./executor";
-import { AuthConfig, McpToolDefinition, OpenApiSpec, ServerConfig } from "./types";
+import {
+  AuthConfig,
+  DefinedServerConfig,
+  McpToolDefinition,
+  OpenApiSpec,
+  ServerConfig,
+} from "./types";
 
 const EXTRA_TOOL_NAMES = {
   DISCOVER: "discover_tools",
+  INFO: "get_info",
   SETUP: "get_setup",
   SET_AUTH: "set_auth",
 } as const;
@@ -25,10 +37,14 @@ export class McpOpenApiServer {
   private config: ServerConfig;
   private currentAuth: AuthConfig;
   private activeBaseUrl!: string;
+  private selectedServerIndex = 0;
+  private selectedServerSource: "config" | "spec" | "default" = "default";
+  private toolPrefix: string;
 
   constructor(config: ServerConfig) {
     this.config = config;
     this.currentAuth = config.auth ?? { type: "none" };
+    this.toolPrefix = normalizeToolPrefix(config.toolPrefix);
     this.server = new Server(
       { name: "mcp-openapi", version: "1.0.0" },
       { capabilities: { tools: {} } }
@@ -40,12 +56,13 @@ export class McpOpenApiServer {
 
     // Determine base URL
     this.activeBaseUrl = this.resolveBaseUrl();
+    this.currentAuth = this.resolveCurrentAuth();
 
     // Create HTTP client
     this.httpClient = createHttpClient(this.activeBaseUrl, this.currentAuth);
 
     // Generate tools from spec
-    this.tools = generateTools(this.spec);
+    this.tools = generateTools(this.spec, this.config.toolPrefix);
 
     this.setupHandlers();
   }
@@ -54,16 +71,34 @@ export class McpOpenApiServer {
     // 1. Explicit servers from config
     if (this.config.servers && this.config.servers.length > 0) {
       const idx = this.config.serverIndex ?? 0;
-      return this.config.servers[idx] ?? this.config.servers[0];
+      this.selectedServerIndex = idx >= 0 ? idx : 0;
+      this.selectedServerSource = "config";
+      return this.config.servers[this.selectedServerIndex]?.url ?? this.config.servers[0].url;
     }
 
     // 2. Servers from spec
     if (this.spec.servers && this.spec.servers.length > 0) {
       const idx = this.config.serverIndex ?? 0;
+      this.selectedServerIndex = idx >= 0 ? idx : 0;
+      this.selectedServerSource = "spec";
       return this.spec.servers[idx]?.url ?? this.spec.servers[0].url;
     }
 
+    this.selectedServerIndex = 0;
+    this.selectedServerSource = "default";
     return "http://localhost";
+  }
+
+  private resolveCurrentAuth(): AuthConfig {
+    if (this.config.auth) {
+      return this.config.auth;
+    }
+
+    if (this.selectedServerSource === "config" && this.config.servers) {
+      return this.config.servers[this.selectedServerIndex]?.auth ?? { type: "none" };
+    }
+
+    return { type: "none" };
   }
 
   private setupHandlers(): void {
@@ -115,7 +150,7 @@ export class McpOpenApiServer {
   }> {
     return [
       {
-        name: EXTRA_TOOL_NAMES.DISCOVER,
+        name: this.getToolName(EXTRA_TOOL_NAMES.DISCOVER),
         description:
           "List all available API tools generated from the OpenAPI specification, including their names, descriptions, HTTP method, path, and parameters.",
         inputSchema: {
@@ -133,13 +168,19 @@ export class McpOpenApiServer {
         },
       },
       {
-        name: EXTRA_TOOL_NAMES.SETUP,
+        name: this.getToolName(EXTRA_TOOL_NAMES.INFO),
+        description:
+          "Return the current OpenAPI, tool, and server configuration, including the list of defined servers and the active authentication.",
+        inputSchema: { type: "object", properties: {} },
+      },
+      {
+        name: this.getToolName(EXTRA_TOOL_NAMES.SETUP),
         description:
           "Return the current server setup: OpenAPI spec source, active base URL, authentication type, and number of tools.",
         inputSchema: { type: "object", properties: {} },
       },
       {
-        name: EXTRA_TOOL_NAMES.SET_AUTH,
+        name: this.getToolName(EXTRA_TOOL_NAMES.SET_AUTH),
         description:
           "Update the authentication configuration at runtime. Supported types: none, basic, bearer, apikey.",
         inputSchema: {
@@ -174,15 +215,19 @@ export class McpOpenApiServer {
     args: Record<string, unknown>
   ): Promise<unknown> {
     // Extra tools
-    if (toolName === EXTRA_TOOL_NAMES.DISCOVER) {
+    if (toolName === this.getToolName(EXTRA_TOOL_NAMES.DISCOVER)) {
       return this.handleDiscoverTools(args);
     }
 
-    if (toolName === EXTRA_TOOL_NAMES.SETUP) {
+    if (toolName === this.getToolName(EXTRA_TOOL_NAMES.INFO)) {
+      return this.handleGetInfo();
+    }
+
+    if (toolName === this.getToolName(EXTRA_TOOL_NAMES.SETUP)) {
       return this.handleGetSetup();
     }
 
-    if (toolName === EXTRA_TOOL_NAMES.SET_AUTH) {
+    if (toolName === this.getToolName(EXTRA_TOOL_NAMES.SET_AUTH)) {
       return this.handleSetAuth(args);
     }
 
@@ -193,6 +238,10 @@ export class McpOpenApiServer {
     }
 
     return executeToolCall(tool, args, this.httpClient, this.spec);
+  }
+
+  private getToolName(name: string): string {
+    return `${this.toolPrefix}${name}`;
   }
 
   private handleDiscoverTools(args: Record<string, unknown>): unknown {
@@ -230,18 +279,77 @@ export class McpOpenApiServer {
     };
   }
 
-  private handleGetSetup(): unknown {
+  private getDefinedServers(): Array<Record<string, unknown>> {
+    if (this.config.servers && this.config.servers.length > 0) {
+      return this.config.servers.map((server, index) =>
+        this.serializeServer(server, index, "config")
+      );
+    }
+
+    if (this.spec.servers && this.spec.servers.length > 0) {
+      return this.spec.servers.map((server, index) =>
+        this.serializeServer(server, index, "spec")
+      );
+    }
+
+    return [
+      {
+        index: 0,
+        source: "default",
+        url: "http://localhost",
+        isActive: true,
+      },
+    ];
+  }
+
+  private serializeServer(
+    server: DefinedServerConfig | { url: string; description?: string },
+    index: number,
+    source: "config" | "spec"
+  ): Record<string, unknown> {
+    const result: Record<string, unknown> = {
+      index,
+      source,
+      url: server.url,
+      isActive: this.selectedServerSource === source && this.selectedServerIndex === index,
+    };
+
+    if ("name" in server && server.name) {
+      result["name"] = server.name;
+    }
+    if (server.description) {
+      result["description"] = server.description;
+    }
+    if ("auth" in server && server.auth) {
+      result["authType"] = server.auth.type;
+    }
+
+    return result;
+  }
+
+  private handleGetInfo(): unknown {
     return {
       openApiSource: this.config.openApiPath,
+      toolPrefix: this.toolPrefix,
       activeBaseUrl: this.activeBaseUrl,
+      activeServerIndex: this.selectedServerIndex,
+      activeServerSource: this.selectedServerSource,
       authType: this.currentAuth.type,
       totalTools: this.tools.length,
+      extraTools: Object.values(EXTRA_TOOL_NAMES).map((name) => this.getToolName(name)),
       specInfo: {
         title: this.spec.info?.title,
         version: this.spec.info?.version,
         description: this.spec.info?.description,
       },
-      availableServers: (this.config.servers ?? this.spec.servers?.map((s) => s.url) ?? []),
+      definedServers: this.getDefinedServers(),
+    };
+  }
+
+  private handleGetSetup(): unknown {
+    return {
+      ...this.handleGetInfo(),
+      availableServers: this.getDefinedServers().map((server) => server["url"]),
     };
   }
 
