@@ -42,7 +42,6 @@ Examples:
 
 function parseArgs(args: string[]): { config: ServerConfig; remaining: string[] } {
   const servers: string[] = [];
-  const remaining: string[] = [];
   let serverIndex: number | undefined;
   let openApiPath: string | undefined;
   let configPath: string | undefined;
@@ -72,7 +71,7 @@ function parseArgs(args: string[]): { config: ServerConfig; remaining: string[] 
     } else if (!args[i].startsWith("--")) {
       openApiPath = args[i];
     } else {
-      remaining.push(args[i]);
+      throw new Error(`Unknown option: ${args[i]}`);
     }
   }
 
@@ -99,7 +98,7 @@ function parseArgs(args: string[]): { config: ServerConfig; remaining: string[] 
     toolPrefix: toolPrefix ?? fileConfig.toolPrefix,
   };
 
-  return { config, remaining };
+  return { config, remaining: [] };
 }
 
 async function main(): Promise<void> {
@@ -110,7 +109,16 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  const { config } = parseArgs(args);
+  let config: ServerConfig;
+
+  try {
+    ({ config } = parseArgs(args));
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`Error: ${msg}\n`);
+    printUsage();
+    process.exit(1);
+  }
 
   if (!config.openApiPath) {
     console.error("Error: OpenAPI spec path or URL is required.\n");

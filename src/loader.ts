@@ -29,7 +29,11 @@ export async function loadOpenApiSpec(source: string): Promise<OpenApiSpec> {
 function parseOpenApiContent(content: string, source: string): OpenApiSpec {
   const trimmed = content.trim();
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-    return JSON.parse(content) as OpenApiSpec;
+    try {
+      return JSON.parse(content) as OpenApiSpec;
+    } catch {
+      throw new Error(`Failed to parse OpenAPI spec from ${source}: not valid JSON`);
+    }
   }
 
   // Try YAML
