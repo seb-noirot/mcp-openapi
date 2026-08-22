@@ -17,6 +17,13 @@ interface RawServerConfigFile {
   timeout?: number;
   retries?: number;
   retryOn?: number[];
+  specDriftCheckIntervalMs?: number;
+  paginationMaxPages?: number;
+  observability?: {
+    debug?: boolean;
+    includeRequestId?: boolean;
+  };
+  safety?: ServerConfig["safety"];
 }
 
 export function loadConfigFile(configPath: string, envOverride?: string): Partial<ServerConfig> {
@@ -44,6 +51,10 @@ export function loadConfigFile(configPath: string, envOverride?: string): Partia
     timeout: envResult?.timeout ?? config.timeout,
     retries: envResult?.retries ?? config.retries,
     retryOn: envResult?.retryOn ?? config.retryOn,
+    specDriftCheckIntervalMs: config.specDriftCheckIntervalMs,
+    paginationMaxPages: config.paginationMaxPages,
+    observability: config.observability,
+    safety: config.safety,
     envs: config.envs,
   };
 }
@@ -70,6 +81,9 @@ function interpolateAuth(auth: AuthConfig | undefined): AuthConfig | undefined {
     ...(auth.apiKeyQueryParam !== undefined
       ? { apiKeyQueryParam: interpolateEnvVars(auth.apiKeyQueryParam) }
       : {}),
+    ...(auth.cookieName !== undefined ? { cookieName: interpolateEnvVars(auth.cookieName) } : {}),
+    ...(auth.cookieValue !== undefined ? { cookieValue: interpolateEnvVars(auth.cookieValue) } : {}),
+    ...(auth.scopes !== undefined ? { scopes: auth.scopes.map((scope) => interpolateEnvVars(scope) ?? "") } : {}),
   };
 }
 
@@ -84,6 +98,11 @@ function interpolateEnvConfig(entry: EnvConfig): EnvConfig {
     ...(entry.apiKeyHeader !== undefined ? { apiKeyHeader: interpolateEnvVars(entry.apiKeyHeader) } : {}),
     ...(entry.apiKeyQueryParam !== undefined
       ? { apiKeyQueryParam: interpolateEnvVars(entry.apiKeyQueryParam) }
+      : {}),
+    ...(entry.cookieName !== undefined ? { cookieName: interpolateEnvVars(entry.cookieName) } : {}),
+    ...(entry.cookieValue !== undefined ? { cookieValue: interpolateEnvVars(entry.cookieValue) } : {}),
+    ...(entry.scopes !== undefined
+      ? { scopes: entry.scopes.map((scope) => interpolateEnvVars(scope) ?? "") }
       : {}),
     ...(entry.timeout !== undefined ? { timeout: entry.timeout } : {}),
     ...(entry.retries !== undefined ? { retries: entry.retries } : {}),
@@ -141,6 +160,22 @@ function buildAuthFromEnvConfig(entry: EnvConfig): AuthConfig | undefined {
       ...(entry.apiKey ? { apiKey: entry.apiKey } : {}),
       ...(entry.apiKeyHeader ? { apiKeyHeader: entry.apiKeyHeader } : {}),
       ...(entry.apiKeyQueryParam ? { apiKeyQueryParam: entry.apiKeyQueryParam } : {}),
+    };
+  }
+
+  if (authType === "oauth2" || authType === "openidconnect") {
+    return {
+      type: authType,
+      ...(entry.token ? { token: entry.token } : {}),
+      ...(entry.scopes ? { scopes: entry.scopes } : {}),
+    };
+  }
+
+  if (authType === "cookie") {
+    return {
+      type: "cookie",
+      ...(entry.cookieName ? { cookieName: entry.cookieName } : {}),
+      ...(entry.cookieValue ? { cookieValue: entry.cookieValue } : {}),
     };
   }
 

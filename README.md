@@ -17,11 +17,18 @@ Point it at any OpenAPI spec and it will expose every operation as an MCP tool �
 - **Multi-environment config** — define named environments in a config file and switch between them with `--env` or the `switch_env` MCP tool.
 - **Env var interpolation** — use `${VAR}` placeholders in any string config value; they are expanded from the process environment at load time.
 - **Authentication** — supports `none`, `basic`, `bearer`, and `apikey` auth.
+- **Extended auth support** — adds `oauth2`, `openidconnect`, and `cookie` auth modes.
 - **Masked auth** — tokens and passwords are redacted to `***` in `get_info` / `get_setup` output.
 - **Runtime auth updates** — change auth without restarting via the `set_auth` tool.
+- **Strict validation/coercion** — request inputs are validated and coerced against OpenAPI schemas before execution.
+- **Structured errors** — consistent error payloads for validation/runtime/HTTP failures.
+- **Safety guardrails** — optional confirmation and deny-rules for destructive operations.
+- **Pagination helper tool** — run paginated operations and aggregate page results.
 - **Operation filtering** — include or exclude operations by tag, HTTP method, or `operationId` using `include`/`exclude` rules in the config file.
 - **Response truncation** — cap large API responses to a configurable byte limit.
-- **Retry & timeout** — configure per-request HTTP timeout and automatic exponential-back-off retries.
+- **Retry & timeout** — method-aware retries with `Retry-After` handling and exponential back-off.
+- **Spec drift detection** — in watch mode, remote specs are polled and tool-set changes are reported.
+- **Observability** — request IDs, latency, and retry count in tool execution metadata.
 - **Full `$ref` resolution** — circular reference guard prevents infinite loops in complex specs.
 - **Tool prefixing** — apply a prefix to built-in and generated tools.
 - **Discovery tool** — list all available tools with filtering by tag or HTTP method.
@@ -61,13 +68,16 @@ Options:
   --server <url>              Base URL to use (overrides servers from spec). Can be repeated.
   --server-index <n>          Index of server to use from spec/config (default: 0)
   --tool-prefix <prefix>      Prefix to add to built-in and generated tool names
-  --auth-type <type>          Authentication type: none | basic | bearer | apikey (default: none)
+  --auth-type <type>          Authentication type: none | basic | bearer | apikey | oauth2 | openidconnect | cookie (default: none)
   --auth-username <user>      Username for basic auth
   --auth-password <pass>      Password for basic auth
   --auth-token <token>        Token for bearer auth
   --api-key <key>             API key value
   --api-key-header <header>   Header name for API key (e.g. X-API-Key)
   --api-key-query-param <p>   Query parameter name for API key
+  --auth-scopes <list>        Comma-separated scopes for oauth2/openidconnect
+  --cookie-name <name>        Cookie name for cookie auth
+  --cookie-value <value>      Cookie value for cookie auth
   --timeout <ms>              HTTP request timeout in milliseconds
   --retries <n>               Number of retry attempts on failure (default: 0)
   --retry-on <codes>          Comma-separated HTTP status codes to retry on (e.g. 429,503)
@@ -88,6 +98,8 @@ Options:
 | `API_KEY`             | API key value                            |
 | `API_KEY_HEADER`      | Header name for API key                  |
 | `API_KEY_QUERY_PARAM` | Query parameter name for API key         |
+| `AUTH_COOKIE_NAME`    | Cookie name for cookie auth              |
+| `AUTH_COOKIE_VALUE`   | Cookie value for cookie auth             |
 
 ---
 
@@ -254,6 +266,7 @@ npx mcp-openapi ./openapi.json \
 | `explain_operation`     | Return a full breakdown of an operation: method, path, parameters, request body, response schemas, and auth requirements. Look up by tool name, operationId, or path+method. |
 | `explain_auth`          | Return the active auth config, all security schemes in the spec, global security requirements, and a configuration guide for all supported auth types. |
 | `get_operation_schema`  | Return the raw JSON schemas for a specific operation's request body and all response bodies. Useful for building integration code. |
+| `paginate_operation`    | Execute a generated tool through multiple pages and aggregate responses. Supports page- and token-based pagination. |
 
 When `--tool-prefix` or `toolPrefix` is set, the same prefix is applied to built-in tools and generated API tools (for example `petstore_get_info` or `petstore_list_pets`).
 

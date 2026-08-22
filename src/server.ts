@@ -6,6 +6,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import * as fs from "fs";
 import { AxiosInstance } from "axios";
+import { createHash } from "crypto";
 import { loadOpenApiSpec } from "./loader";
 import {
   generateTools,
@@ -35,6 +36,7 @@ const EXTRA_TOOL_NAMES = {
   EXPLAIN_OPERATION: "explain_operation",
   EXPLAIN_AUTH: "explain_auth",
   GET_OPERATION_SCHEMA: "get_operation_schema",
+  PAGINATE_OPERATION: "paginate_operation",
 } as const;
 
 export class McpOpenApiServer {
@@ -50,6 +52,8 @@ export class McpOpenApiServer {
   private toolPrefix: string;
   private activeEnvName?: string;
   private fileWatcher?: fs.FSWatcher;
+  private remoteSpecPollTimer?: NodeJS.Timeout;
+  private specFingerprint = "";
 
   constructor(config: ServerConfig) {
     this.config = config;
@@ -63,6 +67,7 @@ export class McpOpenApiServer {
 
   async initialize(): Promise<void> {
     this.spec = await loadOpenApiSpec(this.config.openApiPath);
+    this.specFingerprint = this.computeSpecFingerprint();
 
     // Determine base URL
     this.activeBaseUrl = this.resolveBaseUrl();
@@ -91,6 +96,8 @@ export class McpOpenApiServer {
       timeout: this.config.timeout,
       retries: this.config.retries,
       retryOn: this.config.retryOn,
+      debug: this.config.observability?.debug,
+      includeRequestId: this.config.observability?.includeRequestId,
     };
   }
 
@@ -171,7 +178,7 @@ export class McpOpenApiServer {
           content: [{ type: "text", text: truncated }],
         };
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
+        const msg = this.normalizeErrorPayload(error);
         return {
           content: [{ type: "text", text: `Error: ${msg}` }],
           isError: true,
@@ -232,19 +239,24 @@ export class McpOpenApiServer {
       {
         name: this.getToolName(EXTRA_TOOL_NAMES.SET_AUTH),
         description:
-          "Update the authentication configuration at runtime. Supported types: none, basic, bearer, apikey.",
+          "Update the authentication configuration at runtime. Supported types: none, basic, bearer, apikey, oauth2, openidconnect, cookie.",
         inputSchema: {
           type: "object",
           properties: {
             type: {
               type: "string",
-              enum: ["none", "basic", "bearer", "apikey"],
+              enum: ["none", "basic", "bearer", "apikey", "oauth2", "openidconnect", "cookie"],
               description: "Authentication type",
             },
             username: { type: "string", description: "Username for basic auth" },
             password: { type: "string", description: "Password for basic auth" },
             token: { type: "string", description: "Token for bearer auth" },
             apiKey: { type: "string", description: "API key value" },
+            scopes: {
+              type: "array",
+              items: { type: "string" },
+              description: "Scopes for oauth2/openidconnect token context",
+            },
             apiKeyHeader: {
               type: "string",
               description: "Header name for API key (e.g. X-API-Key)",
@@ -253,6 +265,8 @@ export class McpOpenApiServer {
               type: "string",
               description: "Query parameter name for API key",
             },
+            cookieName: { type: "string", description: "Cookie name for cookie auth" },
+            cookieValue: { type: "string", description: "Cookie value for cookie auth" },
           },
           required: ["type"],
         },
@@ -336,6 +350,38 @@ export class McpOpenApiServer {
             },
           },
         },
+      },
+      {
+        name: this.getToolName(EXTRA_TOOL_NAMES.PAGINATE_OPERATION),
+        description:
+          "Execute a generated list operation across paginated responses and aggregate results. Supports page/offset token-style query pagination.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            toolName: { type: "string", description: "Tool name to execute repeatedly" },
+            maxPages: {
+              type: "integer",
+              description: "Maximum number of pages to fetch (default from config or 5)",
+            },
+            pageParam: { type: "string", description: "Page query parameter name (default: page)" },
+            pageStart: { type: "integer", description: "Initial page value (default: 1)" },
+            limitParam: { type: "string", description: "Limit/page size query parameter name" },
+            limit: { type: "integer", description: "Limit/page size value" },
+            nextTokenField: {
+              type: "string",
+              description: "Field name from response data carrying next cursor/token",
+            },
+            tokenParam: {
+              type: "string",
+              description: "Query parameter name used to pass next token",
+            },
+            args: {
+              type: "object",
+              description: "Base arguments passed to each operation call",
+            },
+          },
+          required: ["toolName"],
+        },
       }
     );
 
@@ -379,11 +425,17 @@ export class McpOpenApiServer {
       return this.handleGetOperationSchema(args);
     }
 
+    if (toolName === this.getToolName(EXTRA_TOOL_NAMES.PAGINATE_OPERATION)) {
+      return this.handlePaginateOperation(args);
+    }
+
     // Dynamic API tools
     const tool = this.tools.find((t) => t.name === toolName);
     if (!tool) {
       throw new Error(`Unknown tool: ${toolName}`);
     }
+
+    this.assertSafetyRules(tool, args);
 
     return executeToolCall(tool, args, this.httpClient, this.spec);
   }
@@ -505,10 +557,16 @@ export class McpOpenApiServer {
       result["password"] = auth.password ? "***" : "(not set)";
     } else if (auth.type === "bearer") {
       result["token"] = auth.token ? "***" : "(not set)";
+    } else if (auth.type === "oauth2" || auth.type === "openidconnect") {
+      result["token"] = auth.token ? "***" : "(not set)";
+      result["scopes"] = auth.scopes ?? [];
     } else if (auth.type === "apikey") {
       result["apiKey"] = auth.apiKey ? "***" : "(not set)";
       result["apiKeyHeader"] = auth.apiKeyHeader ?? "(not set)";
       result["apiKeyQueryParam"] = auth.apiKeyQueryParam ?? "(not set)";
+    } else if (auth.type === "cookie") {
+      result["cookieName"] = auth.cookieName ?? "(not set)";
+      result["cookieValue"] = auth.cookieValue ? "***" : "(not set)";
     }
     return result;
   }
@@ -552,6 +610,11 @@ export class McpOpenApiServer {
       apiKey: args["apiKey"] as string | undefined,
       apiKeyHeader: args["apiKeyHeader"] as string | undefined,
       apiKeyQueryParam: args["apiKeyQueryParam"] as string | undefined,
+      cookieName: args["cookieName"] as string | undefined,
+      cookieValue: args["cookieValue"] as string | undefined,
+      scopes: Array.isArray(args["scopes"])
+        ? (args["scopes"] as string[])
+        : undefined,
     };
 
     this.httpClient = createHttpClient(
@@ -759,11 +822,20 @@ export class McpOpenApiServer {
       activeAuth["passwordSet"] = !!this.currentAuth.password;
     } else if (this.currentAuth.type === "bearer") {
       activeAuth["tokenSet"] = !!this.currentAuth.token;
+    } else if (
+      this.currentAuth.type === "oauth2" ||
+      this.currentAuth.type === "openidconnect"
+    ) {
+      activeAuth["tokenSet"] = !!this.currentAuth.token;
+      activeAuth["scopes"] = this.currentAuth.scopes ?? [];
     } else if (this.currentAuth.type === "apikey") {
       activeAuth["apiKeySet"] = !!this.currentAuth.apiKey;
       activeAuth["apiKeyHeader"] = this.currentAuth.apiKeyHeader ?? "(not set)";
       activeAuth["apiKeyQueryParam"] =
         this.currentAuth.apiKeyQueryParam ?? "(not set)";
+    } else if (this.currentAuth.type === "cookie") {
+      activeAuth["cookieName"] = this.currentAuth.cookieName ?? "(not set)";
+      activeAuth["cookieValueSet"] = !!this.currentAuth.cookieValue;
     }
 
     // Security schemes from spec
@@ -820,6 +892,32 @@ export class McpOpenApiServer {
             apiKeyHeader: "Header name (e.g. X-API-Key) — use this OR apiKeyQueryParam",
             apiKeyQueryParam:
               "Query parameter name (e.g. api_key) — use this OR apiKeyHeader",
+          },
+        },
+        oauth2: {
+          description:
+            "OAuth2 access token mode. Provide a valid token from your identity provider.",
+          fields: {
+            type: "oauth2",
+            token: "OAuth2 access token",
+            scopes: ["optional", "scope", "list"],
+          },
+        },
+        openidconnect: {
+          description:
+            "OpenID Connect bearer access token mode. Provide a valid OIDC access token.",
+          fields: {
+            type: "openidconnect",
+            token: "OIDC access token",
+            scopes: ["optional", "scope", "list"],
+          },
+        },
+        cookie: {
+          description: "Cookie-based auth. Sends Cookie header with configured name/value.",
+          fields: {
+            type: "cookie",
+            cookieName: "Cookie name",
+            cookieValue: "Cookie value",
           },
         },
       },
@@ -884,11 +982,182 @@ export class McpOpenApiServer {
     };
   }
 
+  private async handlePaginateOperation(args: Record<string, unknown>): Promise<unknown> {
+    const toolName = args["toolName"];
+    if (typeof toolName !== "string") {
+      throw new Error("toolName must be a string");
+    }
+    const tool = this.tools.find((t) => t.name === toolName);
+    if (!tool) {
+      throw new Error(`Unknown tool: ${toolName}`);
+    }
+
+    const maxPagesArg = Number(args["maxPages"] ?? this.config.paginationMaxPages ?? 5);
+    const maxPages = Number.isInteger(maxPagesArg) && maxPagesArg > 0 ? maxPagesArg : 5;
+    const pageParam = typeof args["pageParam"] === "string" ? args["pageParam"] : "page";
+    const pageStart = Number(args["pageStart"] ?? 1);
+    const limitParam = typeof args["limitParam"] === "string" ? args["limitParam"] : undefined;
+    const limit = args["limit"];
+    const nextTokenField =
+      typeof args["nextTokenField"] === "string" ? args["nextTokenField"] : undefined;
+    const tokenParam = typeof args["tokenParam"] === "string" ? args["tokenParam"] : undefined;
+    const baseArgs =
+      args["args"] && typeof args["args"] === "object" && !Array.isArray(args["args"])
+        ? (args["args"] as Record<string, unknown>)
+        : {};
+
+    const pages: unknown[] = [];
+    let nextToken: unknown = undefined;
+    let pageNumber = pageStart;
+
+    for (let i = 0; i < maxPages; i++) {
+      const callArgs: Record<string, unknown> = { ...baseArgs };
+      if (tokenParam && nextToken !== undefined) {
+        callArgs[tokenParam] = nextToken;
+      } else {
+        callArgs[pageParam] = pageNumber;
+      }
+      if (limitParam && limit !== undefined) {
+        callArgs[limitParam] = limit;
+      }
+
+      this.assertSafetyRules(tool, callArgs);
+      const pageResult = await executeToolCall(tool, callArgs, this.httpClient, this.spec);
+      pages.push(pageResult);
+
+      const data = (
+        pageResult as { data?: Record<string, unknown>; ok?: boolean }
+      )?.data;
+      if ((pageResult as { ok?: boolean }).ok === false) {
+        break;
+      }
+
+      if (tokenParam && nextTokenField && data && typeof data === "object") {
+        nextToken = data[nextTokenField];
+        if (nextToken === undefined || nextToken === null || nextToken === "") break;
+      } else {
+        const hasItems =
+          Array.isArray((data as Record<string, unknown> | undefined)?.["items"]) &&
+          ((data as Record<string, unknown>)["items"] as unknown[]).length > 0;
+        if (!hasItems) {
+          break;
+        }
+        pageNumber += 1;
+      }
+    }
+
+    return {
+      toolName,
+      pagesFetched: pages.length,
+      maxPages,
+      pages,
+    };
+  }
+
+  private assertSafetyRules(tool: McpToolDefinition, args: Record<string, unknown>): void {
+    const safety = this.config.safety;
+    if (!safety) return;
+
+    const method = tool.method.toUpperCase();
+    if (safety.denyMethods?.some((m) => m.toUpperCase() === method)) {
+      throw new Error(`Safety policy blocked method ${method}`);
+    }
+    if (safety.denyOperationIds?.includes(tool.operationId)) {
+      throw new Error(`Safety policy blocked operationId ${tool.operationId}`);
+    }
+    if (safety.denyToolNames?.includes(tool.name)) {
+      throw new Error(`Safety policy blocked tool ${tool.name}`);
+    }
+    if (safety.denyPaths?.includes(tool.path)) {
+      throw new Error(`Safety policy blocked path ${tool.path}`);
+    }
+
+    const destructiveMethods = (safety.destructiveMethods ?? ["DELETE", "POST"]).map((m) =>
+      m.toUpperCase()
+    );
+    if (safety.requireConfirmForDestructive && destructiveMethods.includes(method)) {
+      if (args["confirm"] !== true) {
+        throw new Error(
+          `Tool ${tool.name} (${tool.method} ${tool.path}) requires { "confirm": true } by safety policy`
+        );
+      }
+    }
+  }
+
+  private normalizeErrorPayload(error: unknown): string {
+    if (error instanceof Error) {
+      try {
+        const parsed = JSON.parse(error.message) as { error?: unknown };
+        if (parsed && typeof parsed === "object" && "error" in parsed) {
+          return JSON.stringify(parsed, null, 2);
+        }
+      } catch {
+        // fall through
+      }
+      return JSON.stringify(
+        {
+          error: {
+            category: "runtime",
+            code: "TOOL_EXECUTION_FAILED",
+            message: error.message,
+          },
+        },
+        null,
+        2
+      );
+    }
+    return JSON.stringify(
+      {
+        error: {
+          category: "runtime",
+          code: "TOOL_EXECUTION_FAILED",
+          message: String(error),
+        },
+      },
+      null,
+      2
+    );
+  }
+
+  private computeSpecFingerprint(): string {
+    return createHash("sha256")
+      .update(JSON.stringify(this.spec.paths ?? {}))
+      .digest("hex");
+  }
+
+  private async reloadSpecAndReportChanges(sourceLabel: string): Promise<void> {
+    const previousFingerprint = this.specFingerprint;
+    const previousToolNames = new Set(this.tools.map((t) => t.name));
+    this.spec = await loadOpenApiSpec(this.config.openApiPath);
+    this.tools = generateTools(
+      this.spec,
+      this.config.toolPrefix,
+      this.config.include,
+      this.config.exclude
+    );
+    this.specFingerprint = this.computeSpecFingerprint();
+    const nextToolNames = new Set(this.tools.map((t) => t.name));
+    const added = [...nextToolNames].filter((n) => !previousToolNames.has(n));
+    const removed = [...previousToolNames].filter((n) => !nextToolNames.has(n));
+    const changed = previousFingerprint !== this.specFingerprint;
+    if (changed) {
+      process.stderr.write(
+        `[mcp-openapi] Spec drift detected (${sourceLabel}). Tool set changed: +${added.length}/-${removed.length}.\n`
+      );
+    } else {
+      process.stderr.write(`[mcp-openapi] Spec reloaded (${sourceLabel}). No tool changes.\n`);
+    }
+  }
+
   async run(watch = false): Promise<void> {
     await this.initialize();
 
-    if (watch && !this.config.openApiPath.startsWith("http")) {
-      this.startWatcher();
+    if (watch) {
+      if (!this.config.openApiPath.startsWith("http")) {
+        this.startWatcher();
+      } else {
+        this.startRemoteSpecPolling();
+      }
     }
 
     const transport = new StdioServerTransport();
@@ -907,16 +1176,7 @@ export class McpOpenApiServer {
           `[mcp-openapi] Spec file changed, reloading: ${specPath}\n`
         );
         try {
-          this.spec = await loadOpenApiSpec(specPath);
-          this.tools = generateTools(
-            this.spec,
-            this.config.toolPrefix,
-            this.config.include,
-            this.config.exclude
-          );
-          process.stderr.write(
-            `[mcp-openapi] Spec reloaded. Tools: ${this.tools.length}\n`
-          );
+          await this.reloadSpecAndReportChanges("local watcher");
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           process.stderr.write(
@@ -932,9 +1192,28 @@ export class McpOpenApiServer {
     }
   }
 
+  private startRemoteSpecPolling(): void {
+    const intervalMs = this.config.specDriftCheckIntervalMs ?? 60_000;
+    this.remoteSpecPollTimer = setInterval(async () => {
+      try {
+        await this.reloadSpecAndReportChanges("remote poll");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`[mcp-openapi] Remote spec poll failed: ${msg}\n`);
+      }
+    }, intervalMs);
+    if (this.remoteSpecPollTimer.unref) {
+      this.remoteSpecPollTimer.unref();
+    }
+  }
+
   stopWatcher(): void {
     this.fileWatcher?.close();
     this.fileWatcher = undefined;
+    if (this.remoteSpecPollTimer) {
+      clearInterval(this.remoteSpecPollTimer);
+      this.remoteSpecPollTimer = undefined;
+    }
   }
 }
 
@@ -962,6 +1241,20 @@ function buildAuthFromEnvEntry(entry: EnvConfig): AuthConfig | undefined {
       ...(entry.apiKey ? { apiKey: entry.apiKey } : {}),
       ...(entry.apiKeyHeader ? { apiKeyHeader: entry.apiKeyHeader } : {}),
       ...(entry.apiKeyQueryParam ? { apiKeyQueryParam: entry.apiKeyQueryParam } : {}),
+    };
+  }
+  if (authType === "oauth2" || authType === "openidconnect") {
+    return {
+      type: authType,
+      ...(entry.token ? { token: entry.token } : {}),
+      ...(entry.scopes ? { scopes: entry.scopes } : {}),
+    };
+  }
+  if (authType === "cookie") {
+    return {
+      type: "cookie",
+      ...(entry.cookieName ? { cookieName: entry.cookieName } : {}),
+      ...(entry.cookieValue ? { cookieValue: entry.cookieValue } : {}),
     };
   }
   return undefined;

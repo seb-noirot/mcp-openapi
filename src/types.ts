@@ -3,27 +3,42 @@
  */
 
 export interface AuthConfig {
-  type: "none" | "basic" | "bearer" | "apikey";
+  type: "none" | "basic" | "bearer" | "apikey" | "oauth2" | "openidconnect" | "cookie";
   username?: string;
   password?: string;
   token?: string;
   apiKey?: string;
   apiKeyHeader?: string;
   apiKeyQueryParam?: string;
+  cookieName?: string;
+  cookieValue?: string;
+  scopes?: string[];
 }
 
 export interface EnvConfig {
   url: string;
-  authType?: "none" | "basic" | "bearer" | "apikey";
+  authType?: "none" | "basic" | "bearer" | "apikey" | "oauth2" | "openidconnect" | "cookie";
   username?: string;
   password?: string;
   token?: string;
   apiKey?: string;
   apiKeyHeader?: string;
   apiKeyQueryParam?: string;
+  cookieName?: string;
+  cookieValue?: string;
+  scopes?: string[];
   timeout?: number;
   retries?: number;
   retryOn?: number[];
+}
+
+export interface SafetyConfig {
+  requireConfirmForDestructive?: boolean;
+  destructiveMethods?: string[];
+  denyMethods?: string[];
+  denyOperationIds?: string[];
+  denyToolNames?: string[];
+  denyPaths?: string[];
 }
 
 export interface DefinedServerConfig {
@@ -51,6 +66,13 @@ export interface ServerConfig {
   timeout?: number;
   retries?: number;
   retryOn?: number[];
+  specDriftCheckIntervalMs?: number;
+  paginationMaxPages?: number;
+  observability?: {
+    debug?: boolean;
+    includeRequestId?: boolean;
+  };
+  safety?: SafetyConfig;
   /** Named environments map, preserved so switch_env can look up entries at runtime */
   envs?: Record<string, EnvConfig>;
 }
@@ -140,6 +162,8 @@ export interface OpenApiSecurityScheme {
   in?: string;
   name?: string;
   description?: string;
+  openIdConnectUrl?: string;
+  flows?: Record<string, unknown>;
 }
 
 export interface OpenApiSpec {

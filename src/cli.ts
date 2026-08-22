@@ -17,13 +17,16 @@ Options:
   --server <url>            Base URL to use (overrides servers from spec). Can be repeated.
   --server-index <n>        Index of server to use from spec/config (default: 0)
   --tool-prefix <prefix>    Prefix to add to built-in and generated tool names
-  --auth-type <type>        Authentication type: none | basic | bearer | apikey (default: none)
+  --auth-type <type>        Authentication type: none | basic | bearer | apikey | oauth2 | openidconnect | cookie (default: none)
   --auth-username <user>    Username for basic auth
   --auth-password <pass>    Password for basic auth
   --auth-token <token>      Token for bearer auth
   --api-key <key>           API key value
   --api-key-header <header> Header name for API key (e.g. X-API-Key)
   --api-key-query-param <p> Query parameter name for API key
+  --auth-scopes <list>      Comma-separated scopes for oauth2/openidconnect
+  --cookie-name <name>      Cookie name for cookie auth
+  --cookie-value <value>    Cookie value for cookie auth
   --timeout <ms>            HTTP request timeout in milliseconds
   --retries <n>             Number of retries for failed requests
   --retry-on <codes>        Comma-separated HTTP status codes to retry on (e.g. 429,503)
@@ -40,6 +43,8 @@ Environment variables:
   API_KEY                   API key value
   API_KEY_HEADER            Header name for API key
   API_KEY_QUERY_PARAM       Query parameter name for API key
+  AUTH_COOKIE_NAME          Cookie name for cookie auth
+  AUTH_COOKIE_VALUE         Cookie value for cookie auth
 
 Examples:
   mcp-openapi ./openapi.json
@@ -116,7 +121,10 @@ function parseArgs(args: string[]): { config: ServerConfig; dryRun: boolean; wat
       args[i] === "--auth-token" ||
       args[i] === "--api-key" ||
       args[i] === "--api-key-header" ||
-      args[i] === "--api-key-query-param"
+      args[i] === "--api-key-query-param" ||
+      args[i] === "--auth-scopes" ||
+      args[i] === "--cookie-name" ||
+      args[i] === "--cookie-value"
     ) {
       consumeArgValue(args, i + 1, args[i]);
       i++; // skip value, handled by parseAuthConfig

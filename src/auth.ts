@@ -14,12 +14,22 @@ interface ParseAuthConfigOptionalOptions extends ParseAuthConfigOptions {
   defaultToNone: false;
 }
 
-const SUPPORTED_AUTH_TYPES = ["none", "basic", "bearer", "apikey"] as const;
+const SUPPORTED_AUTH_TYPES = [
+  "none",
+  "basic",
+  "bearer",
+  "apikey",
+  "oauth2",
+  "openidconnect",
+  "cookie",
+] as const;
 
 export interface HttpClientOptions {
   timeout?: number;
   retries?: number;
   retryOn?: number[];
+  debug?: boolean;
+  includeRequestId?: boolean;
 }
 
 export function isSupportedAuthType(value: unknown): value is AuthConfig["type"] {
@@ -40,6 +50,28 @@ export function createHttpClient(
   };
 
   const instance = axios.create(config);
+  const includeRequestId = options?.includeRequestId ?? true;
+
+  instance.interceptors.request.use((reqConfig) => {
+    const req = reqConfig as AxiosRequestConfig & {
+      __requestMeta?: { requestId: string; startedAt: number; attempt: number };
+    };
+    req.__requestMeta = req.__requestMeta ?? {
+      requestId: randomRequestId(),
+      startedAt: Date.now(),
+      attempt: 0,
+    };
+    req.headers = req.headers ?? {};
+    if (includeRequestId && req.headers["x-request-id"] === undefined) {
+      req.headers["x-request-id"] = req.__requestMeta.requestId;
+    }
+    if (options?.debug) {
+      debugLog(
+        `request method=${String(req.method ?? "GET").toUpperCase()} url=${String(req.url ?? "")} requestId=${req.__requestMeta.requestId} attempt=${req.__requestMeta.attempt}`
+      );
+    }
+    return req;
+  });
 
   if (!auth || auth.type === "none") {
     if (options?.retries) {
@@ -58,6 +90,9 @@ export function createHttpClient(
     } else if (auth.type === "bearer" && auth.token) {
       reqConfig.headers = reqConfig.headers ?? {};
       reqConfig.headers["Authorization"] = "Bearer " + auth.token;
+    } else if ((auth.type === "oauth2" || auth.type === "openidconnect") && auth.token) {
+      reqConfig.headers = reqConfig.headers ?? {};
+      reqConfig.headers["Authorization"] = "Bearer " + auth.token;
     } else if (auth.type === "apikey") {
       if (auth.apiKeyHeader && auth.apiKey) {
         reqConfig.headers = reqConfig.headers ?? {};
@@ -68,6 +103,11 @@ export function createHttpClient(
           [auth.apiKeyQueryParam]: auth.apiKey,
         };
       }
+    } else if (auth.type === "cookie" && auth.cookieName && auth.cookieValue) {
+      reqConfig.headers = reqConfig.headers ?? {};
+      const existing = String(reqConfig.headers["Cookie"] ?? "");
+      const cookiePart = `${auth.cookieName}=${auth.cookieValue}`;
+      reqConfig.headers["Cookie"] = existing ? `${existing}; ${cookiePart}` : cookiePart;
     }
     return reqConfig;
   });
@@ -84,40 +124,58 @@ function applyRetryInterceptor(
   maxRetries: number,
   retryOn: number[]
 ): void {
-  const shouldRetryResponse = (status: number | undefined, attempt: number): boolean => {
+  const shouldRetryResponse = (
+    status: number | undefined,
+    attempt: number,
+    method: string | undefined
+  ): boolean => {
     if (attempt >= maxRetries) return false;
-    // If retryOn is non-empty, only retry on those specific status codes
-    return retryOn.length > 0 && status !== undefined && retryOn.includes(status);
+    const safeMethod = isRetryableMethod(method);
+    if (!safeMethod) return false;
+    if (retryOn.length > 0) {
+      return status !== undefined && retryOn.includes(status);
+    }
+    return status === 429 || (status !== undefined && status >= 500);
   };
 
   instance.interceptors.response.use(
     async (response) => {
-      // Handle success responses that should be retried (e.g. 429 when retryOn is set)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const cfg = response.config as any;
+      const cfg = response.config as AxiosRequestConfig & {
+        __retryAttempt?: number;
+        __requestMeta?: { requestId: string; startedAt: number; attempt: number };
+      };
       const attempt: number = cfg.__retryAttempt ?? 0;
-      if (shouldRetryResponse(response.status, attempt)) {
+      if (shouldRetryResponse(response.status, attempt, cfg.method)) {
         cfg.__retryAttempt = attempt + 1;
-        const delay = Math.pow(2, attempt) * 200;
+        cfg.__requestMeta = cfg.__requestMeta ?? {
+          requestId: randomRequestId(),
+          startedAt: Date.now(),
+          attempt: 0,
+        };
+        cfg.__requestMeta.attempt = cfg.__retryAttempt;
+        const delay = computeRetryDelayMs(attempt, response.headers?.["retry-after"]);
         await new Promise((resolve) => setTimeout(resolve, delay));
         return instance.request(cfg);
       }
       return response;
     },
     async (error: unknown) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const axiosError = error as any;
+      const axiosError = error as {
+        config?: AxiosRequestConfig & { __retryAttempt?: number };
+      };
       const config = axiosError?.config;
       if (!config) return Promise.reject(error);
 
       const attempt: number = config.__retryAttempt ?? 0;
-      // For network/timeout errors, retry when retryOn is empty (retry on any error)
-      const shouldRetry = attempt < maxRetries && retryOn.length === 0;
+      const shouldRetry =
+        attempt < maxRetries &&
+        isRetryableMethod(config.method) &&
+        (retryOn.length === 0 || retryOn.includes(0));
 
       if (!shouldRetry) return Promise.reject(error);
 
       config.__retryAttempt = attempt + 1;
-      const delay = Math.pow(2, attempt) * 200; // exponential back-off: 200ms, 400ms, 800ms…
+      const delay = computeRetryDelayMs(attempt);
       await new Promise((resolve) => setTimeout(resolve, delay));
       return instance.request(config);
     }
@@ -185,8 +243,60 @@ export function parseAuthConfig(
     };
   }
 
+  if (authType === "oauth2" || authType === "openidconnect") {
+    return {
+      type: authType,
+      token:
+        getArg(args, "--auth-token") ??
+        (includeEnvironment ? process.env["AUTH_TOKEN"] : undefined),
+      scopes: getArg(args, "--auth-scopes")
+        ?.split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
+    };
+  }
+
+  if (authType === "cookie") {
+    return {
+      type: "cookie",
+      cookieName:
+        getArg(args, "--cookie-name") ??
+        (includeEnvironment ? process.env["AUTH_COOKIE_NAME"] : undefined),
+      cookieValue:
+        getArg(args, "--cookie-value") ??
+        (includeEnvironment ? process.env["AUTH_COOKIE_VALUE"] : undefined),
+    };
+  }
+
   if (authType === "none") {
     return { type: "none" };
+  }
+
+  function randomRequestId(): string {
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  function isRetryableMethod(method: string | undefined): boolean {
+    const normalized = String(method ?? "GET").toUpperCase();
+    return ["GET", "HEAD", "OPTIONS", "PUT", "DELETE"].includes(normalized);
+  }
+
+  function computeRetryDelayMs(attempt: number, retryAfterHeader?: string): number {
+    if (retryAfterHeader) {
+      const secs = Number(retryAfterHeader);
+      if (!Number.isNaN(secs) && secs >= 0) {
+        return Math.floor(secs * 1000);
+      }
+      const dateMs = Date.parse(retryAfterHeader);
+      if (!Number.isNaN(dateMs)) {
+        return Math.max(0, dateMs - Date.now());
+      }
+    }
+    return Math.pow(2, attempt) * 200;
+  }
+
+  function debugLog(message: string): void {
+    process.stderr.write(`[mcp-openapi][http] ${message}\n`);
   }
 
   throw new Error(`Unsupported auth type: ${authType}`);
