@@ -363,18 +363,19 @@ export class McpOpenApiServer {
   }
 
   private handleGetSetup(): Record<string, unknown> {
-    const snapshot = this.getInfoSnapshot();
-    const definedServers = snapshot["definedServers"];
+    const definedServers = this.getDefinedServers();
 
     return {
-      ...snapshot,
-      availableServers: Array.isArray(definedServers)
-        ? definedServers.map((server) =>
-            typeof server === "object" && server !== null
-              ? (server as Record<string, unknown>)["url"]
-              : undefined
-          )
-        : [],
+      openApiSource: this.config.openApiPath,
+      activeBaseUrl: this.activeBaseUrl,
+      authType: this.currentAuth.type,
+      totalTools: this.tools.length,
+      specInfo: {
+        title: this.spec.info?.title,
+        version: this.spec.info?.version,
+        description: this.spec.info?.description,
+      },
+      availableServers: definedServers.map((server) => server["url"]),
     };
   }
 

@@ -40,7 +40,7 @@ Examples:
 `);
 }
 
-function parseArgs(args: string[]): { config: ServerConfig; remaining: string[] } {
+function parseArgs(args: string[]): { config: ServerConfig } {
   const servers: string[] = [];
   let serverIndex: number | undefined;
   let openApiPath: string | undefined;
@@ -98,7 +98,7 @@ function parseArgs(args: string[]): { config: ServerConfig; remaining: string[] 
     toolPrefix: toolPrefix ?? fileConfig.toolPrefix,
   };
 
-  return { config, remaining: [] };
+  return { config };
 }
 
 async function main(): Promise<void> {

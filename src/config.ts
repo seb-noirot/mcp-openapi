@@ -31,7 +31,11 @@ export function loadConfigFile(configPath: string): Partial<ServerConfig> {
 function parseConfigContent(content: string, source: string): RawServerConfigFile {
   const trimmed = content.trim();
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-    return JSON.parse(content) as RawServerConfigFile;
+    try {
+      return JSON.parse(content) as RawServerConfigFile;
+    } catch {
+      throw new Error(`Failed to parse config file ${source}: not valid JSON`);
+    }
   }
 
   try {

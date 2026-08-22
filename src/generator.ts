@@ -13,12 +13,7 @@ export function normalizeToolPrefix(prefix: string | undefined): string {
     return "";
   }
 
-  const normalized = prefix
-    .replace(/([A-Z])/g, "_$1")
-    .toLowerCase()
-    .replace(/[^a-z0-9_]/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_|_$/g, "");
+  const normalized = normalizeNameSegment(prefix);
 
   return normalized ? `${normalized}_` : "";
 }
@@ -33,13 +28,7 @@ export function generateToolName(
 ): string {
   if (operationId) {
     // Convert operationId to snake_case tool name
-    return operationId
-      .replace(/([A-Z])/g, "_$1")
-      .toLowerCase()
-      .replace(/^_/, "")
-      .replace(/[^a-z0-9_]/g, "_")
-      .replace(/_+/g, "_")
-      .replace(/^_|_$/g, "");
+    return normalizeNameSegment(operationId);
   }
 
   // Fallback: method + path - extract path param names and normalize
@@ -48,6 +37,15 @@ export function generateToolName(
     .replace(/^_|_$/g, "");
 
   return `${method.toLowerCase()}_${pathPart}`;
+}
+
+function normalizeNameSegment(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "");
 }
 
 /**
