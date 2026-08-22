@@ -72,6 +72,12 @@ export interface OpenApiRequestBody {
   content?: Record<string, { schema?: OpenApiSchema }>;
 }
 
+export interface OpenApiResponse {
+  description?: string;
+  headers?: Record<string, { description?: string; schema?: OpenApiSchema }>;
+  content?: Record<string, { schema?: OpenApiSchema }>;
+}
+
 export interface OpenApiOperation {
   operationId?: string;
   summary?: string;
@@ -79,7 +85,7 @@ export interface OpenApiOperation {
   tags?: string[];
   parameters?: OpenApiParameter[];
   requestBody?: OpenApiRequestBody;
-  responses?: Record<string, { description?: string }>;
+  responses?: Record<string, OpenApiResponse>;
   deprecated?: boolean;
   security?: Record<string, string[]>[];
 }

@@ -11,6 +11,7 @@ import {
   buildInputSchema,
   extractRequestBodySchema,
   normalizeToolPrefix,
+  schemaToJsonSchema,
 } from "./generator";
 import { createHttpClient, isSupportedAuthType } from "./auth";
 import { executeToolCall } from "./executor";
@@ -18,6 +19,7 @@ import {
   AuthConfig,
   DefinedServerConfig,
   McpToolDefinition,
+  OpenApiOperation,
   OpenApiSpec,
   ServerConfig,
 } from "./types";
@@ -27,6 +29,9 @@ const EXTRA_TOOL_NAMES = {
   INFO: "get_info",
   SETUP: "get_setup",
   SET_AUTH: "set_auth",
+  EXPLAIN_OPERATION: "explain_operation",
+  EXPLAIN_AUTH: "explain_auth",
+  GET_OPERATION_SCHEMA: "get_operation_schema",
 } as const;
 
 export class McpOpenApiServer {
@@ -219,6 +224,64 @@ export class McpOpenApiServer {
           required: ["type"],
         },
       },
+      {
+        name: this.getToolName(EXTRA_TOOL_NAMES.EXPLAIN_OPERATION),
+        description:
+          "Return a full human-readable breakdown of an API operation: HTTP method, path, summary, parameters, request body, response schemas, authentication requirements, and required headers. Look up by tool name, operationId, or path+method.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            toolName: {
+              type: "string",
+              description: "The MCP tool name of the operation (e.g. list_pets)",
+            },
+            operationId: {
+              type: "string",
+              description: "The operationId from the OpenAPI spec",
+            },
+            path: {
+              type: "string",
+              description: "The API path (e.g. /pets/{id})",
+            },
+            method: {
+              type: "string",
+              description: "The HTTP method (e.g. GET, POST)",
+            },
+          },
+        },
+      },
+      {
+        name: this.getToolName(EXTRA_TOOL_NAMES.EXPLAIN_AUTH),
+        description:
+          "Return a detailed explanation of the active authentication, all security schemes defined in the OpenAPI spec, global security requirements, and how to configure each supported auth type in this MCP server.",
+        inputSchema: { type: "object", properties: {} },
+      },
+      {
+        name: this.getToolName(EXTRA_TOOL_NAMES.GET_OPERATION_SCHEMA),
+        description:
+          "Return the raw JSON schemas for a specific operation's request body and response bodies, useful for programmatic inspection or building integration code. Look up by tool name, operationId, or path+method.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            toolName: {
+              type: "string",
+              description: "The MCP tool name of the operation",
+            },
+            operationId: {
+              type: "string",
+              description: "The operationId from the OpenAPI spec",
+            },
+            path: {
+              type: "string",
+              description: "The API path",
+            },
+            method: {
+              type: "string",
+              description: "The HTTP method",
+            },
+          },
+        },
+      },
     ];
   }
 
@@ -241,6 +304,18 @@ export class McpOpenApiServer {
 
     if (toolName === this.getToolName(EXTRA_TOOL_NAMES.SET_AUTH)) {
       return this.handleSetAuth(args);
+    }
+
+    if (toolName === this.getToolName(EXTRA_TOOL_NAMES.EXPLAIN_OPERATION)) {
+      return this.handleExplainOperation(args);
+    }
+
+    if (toolName === this.getToolName(EXTRA_TOOL_NAMES.EXPLAIN_AUTH)) {
+      return this.handleExplainAuth();
+    }
+
+    if (toolName === this.getToolName(EXTRA_TOOL_NAMES.GET_OPERATION_SCHEMA)) {
+      return this.handleGetOperationSchema(args);
     }
 
     // Dynamic API tools
@@ -405,6 +480,280 @@ export class McpOpenApiServer {
       success: true,
       message: `Authentication updated to type: ${authType}`,
       authType: this.currentAuth.type,
+    };
+  }
+
+  /**
+   * Find a tool by tool name, operationId, or path+method from args.
+   */
+  private findToolFromArgs(
+    args: Record<string, unknown>
+  ): McpToolDefinition | undefined {
+    if (args["toolName"] && typeof args["toolName"] === "string") {
+      return this.tools.find((t) => t.name === args["toolName"]);
+    }
+    if (args["operationId"] && typeof args["operationId"] === "string") {
+      return this.tools.find((t) => t.operationId === args["operationId"]);
+    }
+    if (
+      args["path"] &&
+      typeof args["path"] === "string" &&
+      args["method"] &&
+      typeof args["method"] === "string"
+    ) {
+      const method = (args["method"] as string).toUpperCase();
+      return this.tools.find(
+        (t) => t.path === args["path"] && t.method === method
+      );
+    }
+    return undefined;
+  }
+
+  /**
+   * Get the raw OpenApiOperation from the spec for a given tool.
+   */
+  private getRawOperation(tool: McpToolDefinition): OpenApiOperation | undefined {
+    const pathItem = this.spec.paths?.[tool.path];
+    if (!pathItem) return undefined;
+    return pathItem[tool.method.toLowerCase() as keyof typeof pathItem] as
+      | OpenApiOperation
+      | undefined;
+  }
+
+  private handleExplainOperation(args: Record<string, unknown>): unknown {
+    const tool = this.findToolFromArgs(args);
+    if (!tool) {
+      throw new Error(
+        "Operation not found. Provide one of: toolName, operationId, or path+method."
+      );
+    }
+
+    const op = this.getRawOperation(tool);
+
+    // Parameters grouped by location
+    const paramsByLocation: Record<string, unknown[]> = {};
+    for (const param of tool.parameters) {
+      const loc = param.in;
+      if (!paramsByLocation[loc]) paramsByLocation[loc] = [];
+      paramsByLocation[loc].push({
+        name: param.name,
+        required: param.required ?? false,
+        description: param.description,
+        type: param.schema?.type ?? "string",
+        format: param.schema?.format,
+        enum: param.schema?.enum,
+        default: param.schema?.default,
+      });
+    }
+
+    // Request body
+    let requestBodyInfo: unknown = null;
+    if (tool.requestBody) {
+      const contentTypes = tool.requestBody.content
+        ? Object.keys(tool.requestBody.content)
+        : [];
+      const bodySchema = extractRequestBodySchema(tool.requestBody, this.spec);
+      requestBodyInfo = {
+        required: tool.requestBody.required ?? false,
+        description: tool.requestBody.description,
+        contentTypes,
+        schema: bodySchema ? schemaToJsonSchema(bodySchema, this.spec) : null,
+      };
+    }
+
+    // Response schemas
+    const responses: Record<string, unknown> = {};
+    if (op?.responses) {
+      for (const [statusCode, response] of Object.entries(op.responses)) {
+        const contentTypes = response.content ? Object.keys(response.content) : [];
+        const firstContent = response.content
+          ? Object.values(response.content)[0]
+          : undefined;
+        const schema = firstContent?.schema
+          ? schemaToJsonSchema(firstContent.schema, this.spec)
+          : null;
+        responses[statusCode] = {
+          description: response.description,
+          contentTypes,
+          schema,
+        };
+      }
+    }
+
+    // Authentication requirements
+    const effectiveSecurity = op?.security ?? this.spec.security ?? [];
+    const securitySchemes = this.spec.components?.securitySchemes ?? {};
+    const authRequirements = effectiveSecurity.map((req) =>
+      Object.entries(req).map(([schemeName, scopes]) => {
+        const scheme = securitySchemes[schemeName];
+        return {
+          schemeName,
+          scopes,
+          schemeType: scheme?.type,
+          schemeDetails: scheme
+            ? {
+                scheme: scheme.scheme,
+                in: scheme.in,
+                name: scheme.name,
+                bearerFormat: scheme.bearerFormat,
+                description: scheme.description,
+              }
+            : undefined,
+        };
+      })
+    );
+
+    return {
+      toolName: tool.name,
+      operationId: tool.operationId,
+      method: tool.method,
+      path: tool.path,
+      summary: op?.summary,
+      description: op?.description,
+      tags: tool.tags ?? [],
+      parameters: paramsByLocation,
+      requestBody: requestBodyInfo,
+      responses,
+      authRequirements,
+      deprecated: op?.deprecated ?? false,
+    };
+  }
+
+  private handleExplainAuth(): unknown {
+    const securitySchemes = this.spec.components?.securitySchemes ?? {};
+    const globalSecurity = this.spec.security ?? [];
+
+    // Describe active auth
+    const activeAuth: Record<string, unknown> = {
+      type: this.currentAuth.type,
+    };
+    if (this.currentAuth.type === "basic") {
+      activeAuth["username"] = this.currentAuth.username ?? "(not set)";
+      activeAuth["passwordSet"] = !!this.currentAuth.password;
+    } else if (this.currentAuth.type === "bearer") {
+      activeAuth["tokenSet"] = !!this.currentAuth.token;
+    } else if (this.currentAuth.type === "apikey") {
+      activeAuth["apiKeySet"] = !!this.currentAuth.apiKey;
+      activeAuth["apiKeyHeader"] = this.currentAuth.apiKeyHeader ?? "(not set)";
+      activeAuth["apiKeyQueryParam"] =
+        this.currentAuth.apiKeyQueryParam ?? "(not set)";
+    }
+
+    // Security schemes from spec
+    const schemesInfo = Object.entries(securitySchemes).map(
+      ([name, scheme]) => ({
+        name,
+        type: scheme.type,
+        scheme: scheme.scheme,
+        in: scheme.in,
+        headerOrParamName: scheme.name,
+        bearerFormat: scheme.bearerFormat,
+        description: scheme.description,
+      })
+    );
+
+    // Global security requirements
+    const globalRequirements = globalSecurity.map((req) =>
+      Object.entries(req).map(([schemeName, scopes]) => ({
+        schemeName,
+        scopes,
+      }))
+    );
+
+    return {
+      activeAuth,
+      specSecuritySchemes: schemesInfo,
+      globalSecurityRequirements: globalRequirements,
+      configurationGuide: {
+        none: {
+          description: "No authentication. No additional fields required.",
+          fields: {},
+        },
+        basic: {
+          description: "HTTP Basic authentication (username + password).",
+          fields: {
+            type: "basic",
+            username: "Your username",
+            password: "Your password",
+          },
+        },
+        bearer: {
+          description: "****** authentication (Authorization: ******",
+          fields: {
+            type: "bearer",
+            token: "Your bearer token",
+          },
+        },
+        apikey: {
+          description:
+            "API key authentication. Supply the key via a header or query parameter.",
+          fields: {
+            type: "apikey",
+            apiKey: "Your API key value",
+            apiKeyHeader: "Header name (e.g. X-API-Key) — use this OR apiKeyQueryParam",
+            apiKeyQueryParam:
+              "Query parameter name (e.g. api_key) — use this OR apiKeyHeader",
+          },
+        },
+      },
+    };
+  }
+
+  private handleGetOperationSchema(args: Record<string, unknown>): unknown {
+    const tool = this.findToolFromArgs(args);
+    if (!tool) {
+      throw new Error(
+        "Operation not found. Provide one of: toolName, operationId, or path+method."
+      );
+    }
+
+    const op = this.getRawOperation(tool);
+
+    // Request body schema
+    const requestBodySchema = tool.requestBody
+      ? extractRequestBodySchema(tool.requestBody, this.spec)
+      : undefined;
+
+    const requestBody = requestBodySchema
+      ? schemaToJsonSchema(requestBodySchema, this.spec)
+      : null;
+
+    // Response schemas keyed by status code and content type
+    const responseSchemas: Record<string, unknown> = {};
+    if (op?.responses) {
+      for (const [statusCode, response] of Object.entries(op.responses)) {
+        if (response.content) {
+          responseSchemas[statusCode] = {};
+          for (const [contentType, mediaType] of Object.entries(
+            response.content
+          )) {
+            (responseSchemas[statusCode] as Record<string, unknown>)[
+              contentType
+            ] = mediaType.schema
+              ? schemaToJsonSchema(mediaType.schema, this.spec)
+              : null;
+          }
+        } else {
+          responseSchemas[statusCode] = null;
+        }
+      }
+    }
+
+    // Full input schema (parameters + body)
+    const inputSchema = buildInputSchema(
+      tool.parameters,
+      requestBodySchema,
+      this.spec
+    );
+
+    return {
+      toolName: tool.name,
+      operationId: tool.operationId,
+      method: tool.method,
+      path: tool.path,
+      inputSchema,
+      requestBodySchema: requestBody,
+      responseSchemas,
     };
   }
 
