@@ -198,6 +198,37 @@ describe("generateTools", () => {
     expect(tools.map((t) => t.name)).toContain("petstore_list_pets");
     expect(tools.map((t) => t.name)).toContain("petstore_create_pet");
   });
+
+  it("should include only operations matching include filter by operationId", () => {
+    const tools = generateTools(petStoreSpec, undefined, [{ operationId: "listPets" }]);
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("list_pets");
+    expect(names).not.toContain("create_pet");
+    expect(names).not.toContain("show_pet_by_id");
+  });
+
+  it("should exclude operations matching exclude filter by method", () => {
+    const tools = generateTools(petStoreSpec, undefined, undefined, [{ method: "post" }]);
+    const names = tools.map((t) => t.name);
+    expect(names).not.toContain("create_pet");
+    expect(names).toContain("list_pets");
+    expect(names).toContain("show_pet_by_id");
+  });
+
+  it("should include only operations matching include filter by tag", () => {
+    const tools = generateTools(petStoreSpec, undefined, [{ tag: "pets" }]);
+    const names = tools.map((t) => t.name);
+    expect(names.length).toBeGreaterThan(0);
+    // All included tools should have the "pets" tag
+    tools.forEach((t) => {
+      expect(t.description).toContain("pets");
+    });
+  });
+
+  it("should return no tools when include filter matches nothing", () => {
+    const tools = generateTools(petStoreSpec, undefined, [{ operationId: "nonexistent" }]);
+    expect(tools).toHaveLength(0);
+  });
 });
 
 describe("buildInputSchema", () => {

@@ -16,6 +16,12 @@ interface ParseAuthConfigOptionalOptions extends ParseAuthConfigOptions {
 
 const SUPPORTED_AUTH_TYPES = ["none", "basic", "bearer", "apikey"] as const;
 
+export interface HttpClientOptions {
+  timeout?: number;
+  retries?: number;
+  retryOn?: number[];
+}
+
 export function isSupportedAuthType(value: unknown): value is AuthConfig["type"] {
   return typeof value === "string" && SUPPORTED_AUTH_TYPES.includes(value as AuthConfig["type"]);
 }
@@ -25,13 +31,20 @@ export function isSupportedAuthType(value: unknown): value is AuthConfig["type"]
  */
 export function createHttpClient(
   baseURL: string,
-  auth: AuthConfig | undefined
+  auth: AuthConfig | undefined,
+  options?: HttpClientOptions
 ): AxiosInstance {
-  const config: AxiosRequestConfig = { baseURL };
+  const config: AxiosRequestConfig = {
+    baseURL,
+    ...(options?.timeout !== undefined ? { timeout: options.timeout } : {}),
+  };
 
   const instance = axios.create(config);
 
   if (!auth || auth.type === "none") {
+    if (options?.retries) {
+      applyRetryInterceptor(instance, options.retries, options.retryOn ?? []);
+    }
     return instance;
   }
 
@@ -59,7 +72,41 @@ export function createHttpClient(
     return reqConfig;
   });
 
+  if (options?.retries) {
+    applyRetryInterceptor(instance, options.retries, options.retryOn ?? []);
+  }
+
   return instance;
+}
+
+function applyRetryInterceptor(
+  instance: AxiosInstance,
+  maxRetries: number,
+  retryOn: number[]
+): void {
+  instance.interceptors.response.use(
+    (response) => response,
+    async (error: unknown) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const axiosError = error as any;
+      const config = axiosError?.config;
+      if (!config) return Promise.reject(error);
+
+      const attempt: number = config.__retryAttempt ?? 0;
+      const status: number | undefined = axiosError?.response?.status;
+
+      const shouldRetry =
+        attempt < maxRetries &&
+        (retryOn.length === 0 || (status !== undefined && retryOn.includes(status)));
+
+      if (!shouldRetry) return Promise.reject(error);
+
+      config.__retryAttempt = attempt + 1;
+      const delay = Math.pow(2, attempt) * 200; // exponential back-off: 200ms, 400ms, 800ms…
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      return instance.request(config);
+    }
+  );
 }
 
 /**

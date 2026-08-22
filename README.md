@@ -10,13 +10,24 @@ Point it at any OpenAPI spec and it will expose every operation as an MCP tool �
 
 - **Dynamic tool generation** — tools are created from your OpenAPI spec at startup, using `summary`, `description`, `tags`, and `parameters` from the spec.
 - **Flexible spec loading** — accepts a local file path (JSON or YAML) or a remote URL.
+- **OpenAPI 2.x (Swagger) support** — Swagger 2.0 specs are automatically normalised to OpenAPI 3 format.
 - **Multiple server support** — override the base URL(s) via CLI flags or use the servers defined in the spec.
+- **Server URL variable templates** — `{variable}` placeholders in server URLs are resolved using `default` values from the spec.
 - **Config file support** — load OpenAPI source, tool prefix, servers, and auth from a JSON/YAML config file.
+- **Multi-environment config** — define named environments in a config file and switch between them with `--env` or the `switch_env` MCP tool.
+- **Env var interpolation** — use `${VAR}` placeholders in any string config value; they are expanded from the process environment at load time.
 - **Authentication** — supports `none`, `basic`, `bearer`, and `apikey` auth.
+- **Masked auth** — tokens and passwords are redacted to `***` in `get_info` / `get_setup` output.
 - **Runtime auth updates** — change auth without restarting via the `set_auth` tool.
+- **Operation filtering** — include or exclude operations by tag, HTTP method, or `operationId` using `include`/`exclude` rules in the config file.
+- **Response truncation** — cap large API responses to a configurable byte limit.
+- **Retry & timeout** — configure per-request HTTP timeout and automatic exponential-back-off retries.
+- **Full `$ref` resolution** — circular reference guard prevents infinite loops in complex specs.
 - **Tool prefixing** — apply a prefix to built-in and generated tools.
 - **Discovery tool** — list all available tools with filtering by tag or HTTP method.
 - **Info/setup tools** — inspect the current configuration, active server, and defined servers at any time.
+- **Dry-run mode** — validate spec loading and tool generation without starting the MCP server.
+- **Watch mode** — automatically reload the spec and regenerate tools when the local file changes.
 
 ---
 
@@ -57,6 +68,12 @@ Options:
   --api-key <key>             API key value
   --api-key-header <header>   Header name for API key (e.g. X-API-Key)
   --api-key-query-param <p>   Query parameter name for API key
+  --timeout <ms>              HTTP request timeout in milliseconds
+  --retries <n>               Number of retry attempts on failure (default: 0)
+  --retry-on <codes>          Comma-separated HTTP status codes to retry on (e.g. 429,503)
+  --max-response-bytes <n>    Truncate response bodies larger than this byte limit
+  --dry-run                   Load spec and list tools, then exit without starting the server
+  --watch                     Watch the local spec file and reload on change
   --help                      Show this help
 ```
 
@@ -230,9 +247,10 @@ npx mcp-openapi ./openapi.json \
 | Tool                    | Description                                                                                                           |
 |-------------------------|-----------------------------------------------------------------------------------------------------------------------|
 | `discover_tools`        | List all generated API tools. Optionally filter by `tag` or `method`.                                                |
-| `get_info`              | Return the current OpenAPI, tool prefix, active server/auth, and the list of defined servers.                        |
+| `get_info`              | Return the current OpenAPI, tool prefix, active server/auth (masked), active env, and the list of defined servers.   |
 | `get_setup`             | Return the current server setup: spec source, base URL, auth type, spec info, and tool count.                        |
 | `set_auth`              | Update authentication configuration at runtime without restarting the server.                                         |
+| `switch_env`            | Switch the active environment at runtime (only present when `envs` is configured). Updates the base URL and auth.    |
 | `explain_operation`     | Return a full breakdown of an operation: method, path, parameters, request body, response schemas, and auth requirements. Look up by tool name, operationId, or path+method. |
 | `explain_auth`          | Return the active auth config, all security schemes in the spec, global security requirements, and a configuration guide for all supported auth types. |
 | `get_operation_schema`  | Return the raw JSON schemas for a specific operation's request body and all response bodies. Useful for building integration code. |
@@ -241,7 +259,129 @@ When `--tool-prefix` or `toolPrefix` is set, the same prefix is applied to built
 
 ---
 
-## How It Works
+## Advanced Configuration
+
+### Environment Variable Interpolation
+
+Any string value in a config file can reference environment variables using `${VAR}` syntax. Placeholders are expanded at load time using the process environment.
+
+```json
+{
+  "openApiPath": "${OPENAPI_SPEC_PATH}",
+  "envs": {
+    "prod": {
+      "url": "${API_BASE_URL}",
+      "authType": "bearer",
+      "token": "${API_TOKEN}"
+    }
+  }
+}
+```
+
+Undefined variables expand to an empty string.
+
+---
+
+### Operation Filtering
+
+Use `include` and `exclude` rules in the config file to control which operations become tools. Each rule can match by `tag`, `method`, and/or `operationId` (all specified fields must match — rules within a list are OR-ed).
+
+```json
+{
+  "openApiPath": "./openapi.yaml",
+  "include": [
+    { "tag": "pets" },
+    { "operationId": "listUsers" }
+  ],
+  "exclude": [
+    { "method": "delete" }
+  ]
+}
+```
+
+`include` is applied first (keep only matching operations), then `exclude` removes matching ones.
+
+---
+
+### Retry and Timeout
+
+```bash
+npx mcp-openapi ./openapi.yaml \
+  --timeout 5000 \
+  --retries 3 \
+  --retry-on 429,503
+```
+
+Or in a config file:
+
+```json
+{
+  "openApiPath": "./openapi.yaml",
+  "timeout": 5000,
+  "retries": 3,
+  "retryOn": [429, 503]
+}
+```
+
+If `retryOn` is omitted, retries apply to any error. Back-off starts at 200 ms and doubles with each attempt.
+
+---
+
+### Response Truncation
+
+Cap large API responses to avoid overwhelming the AI context window:
+
+```bash
+npx mcp-openapi ./openapi.yaml --max-response-bytes 102400
+```
+
+Or in a config file:
+
+```json
+{
+  "openApiPath": "./openapi.yaml",
+  "maxResponseBodyBytes": 102400
+}
+```
+
+Truncated responses include a `…[truncated: response exceeded N bytes]` suffix.
+
+---
+
+### Dry-Run Mode
+
+Validate spec loading and tool generation without starting the MCP server:
+
+```bash
+npx mcp-openapi ./openapi.yaml --dry-run
+```
+
+Prints all generated tool names and exits.
+
+---
+
+### Watch Mode
+
+Automatically reload the spec and regenerate tools when a local spec file changes:
+
+```bash
+npx mcp-openapi ./openapi.yaml --watch
+```
+
+Watch mode is only available for local files (not remote URLs).
+
+---
+
+### Swagger 2.0 Support
+
+Swagger 2.0 (OpenAPI 2.x) specs are automatically normalised to OpenAPI 3 format at load time. `host`, `basePath`, and `schemes` are combined into a `servers` entry; `body` parameters are converted to `requestBody`; `definitions` become `components.schemas`.
+
+```bash
+npx mcp-openapi ./swagger2.json
+```
+
+---
+
 
 1. The server loads the OpenAPI spec from the given path or URL.
 2. It iterates over all paths and HTTP methods, skipping deprecated operations.

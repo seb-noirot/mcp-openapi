@@ -21,6 +21,9 @@ export interface EnvConfig {
   apiKey?: string;
   apiKeyHeader?: string;
   apiKeyQueryParam?: string;
+  timeout?: number;
+  retries?: number;
+  retryOn?: number[];
 }
 
 export interface DefinedServerConfig {
@@ -30,12 +33,26 @@ export interface DefinedServerConfig {
   auth?: AuthConfig;
 }
 
+export interface FilterRule {
+  tag?: string;
+  method?: string;
+  operationId?: string;
+}
+
 export interface ServerConfig {
   openApiPath: string;
   servers?: DefinedServerConfig[];
   auth?: AuthConfig;
   serverIndex?: number;
   toolPrefix?: string;
+  include?: FilterRule[];
+  exclude?: FilterRule[];
+  maxResponseBodyBytes?: number;
+  timeout?: number;
+  retries?: number;
+  retryOn?: number[];
+  /** Named environments map, preserved so switch_env can look up entries at runtime */
+  envs?: Record<string, EnvConfig>;
 }
 
 export interface OpenApiInfo {

@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import { McpOpenApiServer } from "./server";
+import { generateTools } from "./generator";
+import { loadOpenApiSpec } from "./loader";
 import { parseAuthConfig } from "./auth";
 import { loadConfigFile } from "./config";
 import { ServerConfig } from "./types";
@@ -22,6 +24,12 @@ Options:
   --api-key <key>           API key value
   --api-key-header <header> Header name for API key (e.g. X-API-Key)
   --api-key-query-param <p> Query parameter name for API key
+  --timeout <ms>            HTTP request timeout in milliseconds
+  --retries <n>             Number of retries for failed requests
+  --retry-on <codes>        Comma-separated HTTP status codes to retry on (e.g. 429,503)
+  --max-response-bytes <n>  Maximum response body size in bytes before truncation
+  --dry-run                 Print generated tool names and exit without starting the server
+  --watch                   Watch local spec file for changes and reload tools automatically
   --help                    Show this help
 
 Environment variables:
@@ -39,16 +47,24 @@ Examples:
   mcp-openapi ./spec.yaml --server https://api.example.com --auth-type basic --auth-username admin --auth-password secret
   mcp-openapi --config ./mcp-openapi.config.yaml
   mcp-openapi --config ./mcp-openapi.config.yaml --env dev
+  mcp-openapi ./spec.yaml --dry-run
+  mcp-openapi ./spec.yaml --watch
 `);
 }
 
-function parseArgs(args: string[]): { config: ServerConfig } {
+function parseArgs(args: string[]): { config: ServerConfig; dryRun: boolean; watch: boolean } {
   const servers: string[] = [];
   let serverIndex: number | undefined;
   let openApiPath: string | undefined;
   let configPath: string | undefined;
   let toolPrefix: string | undefined;
   let envName: string | undefined;
+  let timeout: number | undefined;
+  let retries: number | undefined;
+  let retryOn: number[] | undefined;
+  let maxResponseBodyBytes: number | undefined;
+  let dryRun = false;
+  let watch = false;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--config" && i + 1 < args.length) {
@@ -71,6 +87,28 @@ function parseArgs(args: string[]): { config: ServerConfig } {
       toolPrefix = consumeArgValue(args, ++i, "--tool-prefix");
     } else if (args[i] === "--tool-prefix") {
       throw new Error("Missing value for --tool-prefix");
+    } else if (args[i] === "--timeout" && i + 1 < args.length) {
+      timeout = parseInt(consumeArgValue(args, ++i, "--timeout"), 10);
+    } else if (args[i] === "--timeout") {
+      throw new Error("Missing value for --timeout");
+    } else if (args[i] === "--retries" && i + 1 < args.length) {
+      retries = parseInt(consumeArgValue(args, ++i, "--retries"), 10);
+    } else if (args[i] === "--retries") {
+      throw new Error("Missing value for --retries");
+    } else if (args[i] === "--retry-on" && i + 1 < args.length) {
+      retryOn = consumeArgValue(args, ++i, "--retry-on")
+        .split(",")
+        .map((s) => parseInt(s.trim(), 10));
+    } else if (args[i] === "--retry-on") {
+      throw new Error("Missing value for --retry-on");
+    } else if (args[i] === "--max-response-bytes" && i + 1 < args.length) {
+      maxResponseBodyBytes = parseInt(consumeArgValue(args, ++i, "--max-response-bytes"), 10);
+    } else if (args[i] === "--max-response-bytes") {
+      throw new Error("Missing value for --max-response-bytes");
+    } else if (args[i] === "--dry-run") {
+      dryRun = true;
+    } else if (args[i] === "--watch") {
+      watch = true;
     } else if (
       args[i] === "--auth-type" ||
       args[i] === "--auth-username" ||
@@ -114,9 +152,20 @@ function parseArgs(args: string[]): { config: ServerConfig } {
         : {}),
     serverIndex: serverIndex ?? fileConfig.serverIndex ?? 0,
     toolPrefix: toolPrefix ?? fileConfig.toolPrefix,
+    ...(fileConfig.include ? { include: fileConfig.include } : {}),
+    ...(fileConfig.exclude ? { exclude: fileConfig.exclude } : {}),
+    ...(maxResponseBodyBytes !== undefined
+      ? { maxResponseBodyBytes }
+      : fileConfig.maxResponseBodyBytes !== undefined
+        ? { maxResponseBodyBytes: fileConfig.maxResponseBodyBytes }
+        : {}),
+    timeout: timeout ?? fileConfig.timeout,
+    retries: retries ?? fileConfig.retries,
+    retryOn: retryOn ?? fileConfig.retryOn,
+    ...(fileConfig.envs ? { envs: fileConfig.envs } : {}),
   };
 
-  return { config };
+  return { config, dryRun, watch };
 }
 
 function consumeArgValue(args: string[], valueIndex: number, flag: string): string {
@@ -136,9 +185,11 @@ async function main(): Promise<void> {
   }
 
   let config: ServerConfig;
+  let dryRun: boolean;
+  let watch: boolean;
 
   try {
-    ({ config } = parseArgs(args));
+    ({ config, dryRun, watch } = parseArgs(args));
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     console.error(`Error: ${msg}\n`);
@@ -152,10 +203,26 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  if (dryRun) {
+    try {
+      const spec = await loadOpenApiSpec(config.openApiPath);
+      const tools = generateTools(spec, config.toolPrefix, config.include, config.exclude);
+      console.log(`Tools generated from ${config.openApiPath} (${tools.length} total):\n`);
+      for (const tool of tools) {
+        console.log(`  ${tool.name}  [${tool.method} ${tool.path}]`);
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error(`Error: ${msg}`);
+      process.exit(1);
+    }
+    return;
+  }
+
   const mcpServer = new McpOpenApiServer(config);
 
   try {
-    await mcpServer.run();
+    await mcpServer.run(watch);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     console.error(`[mcp-openapi] Failed to start: ${msg}`);

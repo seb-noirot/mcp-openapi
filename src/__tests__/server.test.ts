@@ -426,4 +426,146 @@ describe("McpOpenApiServer", () => {
       expect(result["requestBodySchema"]).toBeNull();
     });
   });
+
+  describe("truncateResponse", () => {
+    it("should return the full text when no limit is set", async () => {
+      const specPath = writeSpec("spec-trunc-nolimit.json", {
+        openapi: "3.0.0",
+        info: { title: "T", version: "1" },
+        paths: {},
+      });
+      const config: ServerConfig = { openApiPath: specPath };
+      const server = new McpOpenApiServer(config);
+      await server.initialize();
+
+      const longText = "a".repeat(10_000);
+      const result = (server as any).truncateResponse(longText);
+      expect(result).toBe(longText);
+    });
+
+    it("should truncate text that exceeds the byte limit", async () => {
+      const specPath = writeSpec("spec-trunc-limit.json", {
+        openapi: "3.0.0",
+        info: { title: "T", version: "1" },
+        paths: {},
+      });
+      const config: ServerConfig = { openApiPath: specPath, maxResponseBodyBytes: 10 };
+      const server = new McpOpenApiServer(config);
+      await server.initialize();
+
+      const text = "a".repeat(100);
+      const result = (server as any).truncateResponse(text) as string;
+      expect(result).toContain("[truncated");
+      expect(Buffer.byteLength(result.split("\n")[0]!, "utf8")).toBeLessThanOrEqual(10);
+    });
+  });
+
+  describe("maskAuth", () => {
+    async function makeBasicServer(): Promise<McpOpenApiServer> {
+      const specPath = writeSpec("spec-mask.json", {
+        openapi: "3.0.0",
+        info: { title: "T", version: "1" },
+        paths: {},
+      });
+      const config: ServerConfig = {
+        openApiPath: specPath,
+        auth: { type: "basic", username: "admin", password: "hunter2" },
+      };
+      const server = new McpOpenApiServer(config);
+      await server.initialize();
+      return server;
+    }
+
+    it("should mask password in basic auth", async () => {
+      const server = await makeBasicServer();
+      const masked = (server as any).maskAuth(server["currentAuth"]) as Record<string, unknown>;
+      expect(masked["username"]).toBe("admin");
+      expect(masked["password"]).toBe("***");
+    });
+
+    it("should mask bearer token", async () => {
+      const specPath = writeSpec("spec-mask-bearer.json", {
+        openapi: "3.0.0",
+        info: { title: "T", version: "1" },
+        paths: {},
+      });
+      const config: ServerConfig = {
+        openApiPath: specPath,
+        auth: { type: "bearer", token: "supersecret" },
+      };
+      const server = new McpOpenApiServer(config);
+      await server.initialize();
+
+      const masked = (server as any).maskAuth(server["currentAuth"]) as Record<string, unknown>;
+      expect(masked["token"]).toBe("***");
+    });
+
+    it("should include masked auth in getInfoSnapshot", async () => {
+      const server = await makeBasicServer();
+      const snapshot = (server as any).getInfoSnapshot() as Record<string, unknown>;
+      expect(snapshot["authSummary"]).toBeDefined();
+      const summary = snapshot["authSummary"] as Record<string, unknown>;
+      expect(summary["password"]).toBe("***");
+    });
+  });
+
+  describe("switch_env tool", () => {
+    it("should expose switch_env tool when envs are configured", async () => {
+      const specPath = writeSpec("spec-switch-env.json", {
+        openapi: "3.0.0",
+        info: { title: "T", version: "1" },
+        paths: {},
+      });
+      const config: ServerConfig = {
+        openApiPath: specPath,
+        envs: {
+          dev: { url: "https://dev.api.example.com", authType: "none" },
+          prod: { url: "https://api.example.com", authType: "none" },
+        },
+      };
+      const server = new McpOpenApiServer(config);
+      await server.initialize();
+
+      const extraTools = (server as any).getExtraToolDefinitions() as Array<{ name: string }>;
+      const toolNames = extraTools.map((t) => t.name);
+      expect(toolNames).toContain("switch_env");
+    });
+
+    it("should NOT expose switch_env tool when no envs are configured", async () => {
+      const specPath = writeSpec("spec-no-switch-env.json", {
+        openapi: "3.0.0",
+        info: { title: "T", version: "1" },
+        paths: {},
+      });
+      const config: ServerConfig = { openApiPath: specPath };
+      const server = new McpOpenApiServer(config);
+      await server.initialize();
+
+      const extraTools = (server as any).getExtraToolDefinitions() as Array<{ name: string }>;
+      const toolNames = extraTools.map((t) => t.name);
+      expect(toolNames).not.toContain("switch_env");
+    });
+
+    it("should switch active base URL when handleSwitchEnv is called", async () => {
+      const specPath = writeSpec("spec-handle-switch.json", {
+        openapi: "3.0.0",
+        info: { title: "T", version: "1" },
+        paths: {},
+      });
+      const config: ServerConfig = {
+        openApiPath: specPath,
+        envs: {
+          dev: { url: "https://dev.api.example.com", authType: "none" },
+          prod: { url: "https://api.example.com", authType: "none" },
+        },
+      };
+      const server = new McpOpenApiServer(config);
+      await server.initialize();
+
+      (server as any).handleSwitchEnv({ env: "prod" });
+      const snapshot = (server as any).getInfoSnapshot() as Record<string, unknown>;
+      expect(snapshot["activeBaseUrl"]).toBe("https://api.example.com");
+      expect(snapshot["activeEnv"]).toBe("prod");
+    });
+  });
 });

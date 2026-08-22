@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { loadOpenApiSpec } from "../loader";
+import { loadOpenApiSpec, resolveServerVariables } from "../loader";
 
 describe("loadOpenApiSpec", () => {
   const tmpDir = path.join(process.cwd(), "tmp-test");
@@ -52,5 +52,66 @@ paths: {}
 
   it("should throw for missing file", async () => {
     await expect(loadOpenApiSpec("/nonexistent/path/spec.json")).rejects.toThrow();
+  });
+
+  it("should normalize a Swagger 2.0 spec to OpenAPI 3 format", async () => {
+    const swagger2: object = {
+      swagger: "2.0",
+      info: { title: "Swagger2 Test", version: "1.0.0" },
+      host: "api.example.com",
+      basePath: "/v1",
+      schemes: ["https"],
+      paths: {
+        "/pets": {
+          get: {
+            operationId: "listPets",
+            summary: "List pets",
+            parameters: [],
+            responses: { "200": { description: "ok" } },
+          },
+        },
+      },
+    };
+
+    const filePath = path.join(tmpDir, "swagger2.json");
+    fs.writeFileSync(filePath, JSON.stringify(swagger2));
+
+    const loaded = await loadOpenApiSpec(filePath);
+
+    expect(loaded.servers).toBeDefined();
+    expect(loaded.servers![0].url).toBe("https://api.example.com/v1");
+    const getOp = loaded.paths?.["/pets"]?.get as import("../types").OpenApiOperation | undefined;
+    expect(getOp?.operationId).toBe("listPets");
+  });
+});
+
+describe("resolveServerVariables", () => {
+  it("should replace variable placeholders with default values", () => {
+    const server = {
+      url: "https://{environment}.api.example.com/{version}",
+      variables: {
+        environment: { default: "prod", enum: ["dev", "staging", "prod"] },
+        version: { default: "v1" },
+      },
+    };
+
+    const resolved = resolveServerVariables(server);
+    expect(resolved.url).toBe("https://prod.api.example.com/v1");
+  });
+
+  it("should return the URL unchanged when no variables present", () => {
+    const server = { url: "https://api.example.com" };
+    const resolved = resolveServerVariables(server);
+    expect(resolved.url).toBe("https://api.example.com");
+  });
+
+  it("should replace variable with empty string when variable has no default", () => {
+    const server = {
+      url: "https://{host}/api",
+      variables: { host: {} },
+    };
+    const resolved = resolveServerVariables(server);
+    // Variable with no default resolves to empty string
+    expect(resolved.url).toBe("https://host/api");
   });
 });

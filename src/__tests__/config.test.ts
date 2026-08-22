@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { loadConfigFile } from "../config";
+import { loadConfigFile, interpolateEnvVars } from "../config";
 
 describe("loadConfigFile", () => {
   const tmpDir = path.join(process.cwd(), "tmp-config-test");
@@ -200,5 +200,42 @@ describe("loadConfigFile", () => {
       expect(config.servers?.[0].url).toBe("https://api.example.com");
       expect(config.auth?.token).toBe("existing-token");
     });
+  });
+});
+
+describe("interpolateEnvVars", () => {
+  const origEnv = process.env;
+
+  beforeEach(() => {
+    process.env = { ...origEnv };
+  });
+
+  afterEach(() => {
+    process.env = origEnv;
+  });
+
+  it("should replace ${VAR} placeholder with the environment variable value", () => {
+    process.env["MY_TOKEN"] = "secret";
+    // eslint-disable-next-line no-template-curly-in-string
+    expect(interpolateEnvVars("Bearer ${MY_TOKEN}")).toBe("Bearer secret");
+  });
+
+  it("should expand multiple variables in one string", () => {
+    process.env["HOST"] = "api.example.com";
+    process.env["PORT"] = "8080";
+    expect(interpolateEnvVars("https://${HOST}:${PORT}")).toBe("https://api.example.com:8080");
+  });
+
+  it("should replace missing env vars with empty string", () => {
+    delete process.env["MISSING_VAR"];
+    expect(interpolateEnvVars("token=${MISSING_VAR}")).toBe("token=");
+  });
+
+  it("should return the string unchanged when no placeholders", () => {
+    expect(interpolateEnvVars("https://api.example.com")).toBe("https://api.example.com");
+  });
+
+  it("should return undefined when input is undefined", () => {
+    expect(interpolateEnvVars(undefined)).toBeUndefined();
   });
 });

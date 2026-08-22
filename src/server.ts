@@ -4,6 +4,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import * as fs from "fs";
 import { AxiosInstance } from "axios";
 import { loadOpenApiSpec } from "./loader";
 import {
@@ -13,11 +14,12 @@ import {
   normalizeToolPrefix,
   schemaToJsonSchema,
 } from "./generator";
-import { createHttpClient, isSupportedAuthType } from "./auth";
+import { createHttpClient, HttpClientOptions, isSupportedAuthType } from "./auth";
 import { executeToolCall } from "./executor";
 import {
   AuthConfig,
   DefinedServerConfig,
+  EnvConfig,
   McpToolDefinition,
   OpenApiOperation,
   OpenApiSpec,
@@ -29,6 +31,7 @@ const EXTRA_TOOL_NAMES = {
   INFO: "get_info",
   SETUP: "get_setup",
   SET_AUTH: "set_auth",
+  SWITCH_ENV: "switch_env",
   EXPLAIN_OPERATION: "explain_operation",
   EXPLAIN_AUTH: "explain_auth",
   GET_OPERATION_SCHEMA: "get_operation_schema",
@@ -45,6 +48,8 @@ export class McpOpenApiServer {
   private selectedServerIndex = 0;
   private selectedServerSource: "config" | "spec" | "default" = "default";
   private toolPrefix: string;
+  private activeEnvName?: string;
+  private fileWatcher?: fs.FSWatcher;
 
   constructor(config: ServerConfig) {
     this.config = config;
@@ -64,12 +69,29 @@ export class McpOpenApiServer {
     this.currentAuth = this.resolveCurrentAuth();
 
     // Create HTTP client
-    this.httpClient = createHttpClient(this.activeBaseUrl, this.currentAuth);
+    this.httpClient = createHttpClient(
+      this.activeBaseUrl,
+      this.currentAuth,
+      this.buildHttpClientOptions()
+    );
 
     // Generate tools from spec
-    this.tools = generateTools(this.spec, this.config.toolPrefix);
+    this.tools = generateTools(
+      this.spec,
+      this.config.toolPrefix,
+      this.config.include,
+      this.config.exclude
+    );
 
     this.setupHandlers();
+  }
+
+  private buildHttpClientOptions(): HttpClientOptions {
+    return {
+      timeout: this.config.timeout,
+      retries: this.config.retries,
+      retryOn: this.config.retryOn,
+    };
   }
 
   private resolveBaseUrl(): string {
@@ -142,13 +164,11 @@ export class McpOpenApiServer {
 
       try {
         const result = await this.handleToolCall(toolName, args);
+        const serialized =
+          typeof result === "string" ? result : JSON.stringify(result, null, 2);
+        const truncated = this.truncateResponse(serialized);
         return {
-          content: [
-            {
-              type: "text",
-              text: typeof result === "string" ? result : JSON.stringify(result, null, 2),
-            },
-          ],
+          content: [{ type: "text", text: truncated }],
         };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
@@ -160,12 +180,25 @@ export class McpOpenApiServer {
     });
   }
 
+  /**
+   * Truncate a serialized response to maxResponseBodyBytes if configured.
+   */
+  private truncateResponse(text: string): string {
+    const limit = this.config.maxResponseBodyBytes;
+    if (!limit) return text;
+    const bytes = Buffer.byteLength(text, "utf8");
+    if (bytes <= limit) return text;
+    // Truncate to byte limit (UTF-8 safe)
+    const truncated = Buffer.from(text, "utf8").slice(0, limit).toString("utf8");
+    return `${truncated}\n…[truncated: response exceeded ${limit} bytes]`;
+  }
+
   private getExtraToolDefinitions(): Array<{
     name: string;
     description: string;
     inputSchema: Record<string, unknown>;
   }> {
-    return [
+    const defs: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }> = [
       {
         name: this.getToolName(EXTRA_TOOL_NAMES.DISCOVER),
         description:
@@ -224,6 +257,28 @@ export class McpOpenApiServer {
           required: ["type"],
         },
       },
+    ];
+
+    // switch_env is only exposed when envs are configured
+    if (this.config.envs && Object.keys(this.config.envs).length > 0) {
+      defs.push({
+        name: this.getToolName(EXTRA_TOOL_NAMES.SWITCH_ENV),
+        description:
+          "Switch to a named environment defined in the config file. Changes the base URL and authentication without restarting.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            env: {
+              type: "string",
+              description: `Name of the environment to activate. Available: ${Object.keys(this.config.envs).join(", ")}`,
+            },
+          },
+          required: ["env"],
+        },
+      });
+    }
+
+    defs.push(
       {
         name: this.getToolName(EXTRA_TOOL_NAMES.EXPLAIN_OPERATION),
         description:
@@ -281,8 +336,10 @@ export class McpOpenApiServer {
             },
           },
         },
-      },
-    ];
+      }
+    );
+
+    return defs;
   }
 
   private async handleToolCall(
@@ -304,6 +361,10 @@ export class McpOpenApiServer {
 
     if (toolName === this.getToolName(EXTRA_TOOL_NAMES.SET_AUTH)) {
       return this.handleSetAuth(args);
+    }
+
+    if (toolName === this.getToolName(EXTRA_TOOL_NAMES.SWITCH_ENV)) {
+      return this.handleSwitchEnv(args);
     }
 
     if (toolName === this.getToolName(EXTRA_TOOL_NAMES.EXPLAIN_OPERATION)) {
@@ -419,9 +480,12 @@ export class McpOpenApiServer {
       openApiSource: this.config.openApiPath,
       toolPrefix: this.toolPrefix,
       activeBaseUrl: this.activeBaseUrl,
+      activeEnv: this.activeEnvName,
       activeServerIndex: this.selectedServerIndex,
       activeServerSource: this.selectedServerSource,
       authType: this.currentAuth.type,
+      // Auth credentials are intentionally masked
+      authSummary: this.maskAuth(this.currentAuth),
       totalTools: this.tools.length,
       extraTools: Object.values(EXTRA_TOOL_NAMES).map((name) => this.getToolName(name)),
       specInfo: {
@@ -431,6 +495,22 @@ export class McpOpenApiServer {
       },
       definedServers: this.getDefinedServers(),
     };
+  }
+
+  /** Return a redacted summary of the current auth — never exposes raw secrets. */
+  private maskAuth(auth: AuthConfig): Record<string, unknown> {
+    const result: Record<string, unknown> = { type: auth.type };
+    if (auth.type === "basic") {
+      result["username"] = auth.username ?? "(not set)";
+      result["password"] = auth.password ? "***" : "(not set)";
+    } else if (auth.type === "bearer") {
+      result["token"] = auth.token ? "***" : "(not set)";
+    } else if (auth.type === "apikey") {
+      result["apiKey"] = auth.apiKey ? "***" : "(not set)";
+      result["apiKeyHeader"] = auth.apiKeyHeader ?? "(not set)";
+      result["apiKeyQueryParam"] = auth.apiKeyQueryParam ?? "(not set)";
+    }
+    return result;
   }
 
   private handleGetInfo(): Record<string, unknown> {
@@ -474,11 +554,58 @@ export class McpOpenApiServer {
       apiKeyQueryParam: args["apiKeyQueryParam"] as string | undefined,
     };
 
-    this.httpClient = createHttpClient(this.activeBaseUrl, this.currentAuth);
+    this.httpClient = createHttpClient(
+      this.activeBaseUrl,
+      this.currentAuth,
+      this.buildHttpClientOptions()
+    );
 
     return {
       success: true,
       message: `Authentication updated to type: ${authType}`,
+      authType: this.currentAuth.type,
+    };
+  }
+
+  private handleSwitchEnv(args: Record<string, unknown>): unknown {
+    const envName = args["env"];
+    if (typeof envName !== "string") {
+      throw new Error("env must be a string");
+    }
+
+    const envs = this.config.envs;
+    if (!envs) {
+      throw new Error("No environments configured");
+    }
+
+    const entry = envs[envName];
+    if (!entry) {
+      throw new Error(
+        `Environment "${envName}" not found. Available: ${Object.keys(envs).join(", ")}`
+      );
+    }
+
+    // Apply env URL and auth
+    this.activeBaseUrl = entry.url;
+    this.activeEnvName = envName;
+    this.selectedServerSource = "config";
+    this.selectedServerIndex = 0;
+
+    // Build auth from the env entry
+    const authFromEnv = buildAuthFromEnvEntry(entry);
+    this.currentAuth = authFromEnv ?? { type: "none" };
+
+    this.httpClient = createHttpClient(this.activeBaseUrl, this.currentAuth, {
+      timeout: entry.timeout ?? this.config.timeout,
+      retries: entry.retries ?? this.config.retries,
+      retryOn: entry.retryOn ?? this.config.retryOn,
+    });
+
+    return {
+      success: true,
+      message: `Switched to environment: ${envName}`,
+      env: envName,
+      baseUrl: this.activeBaseUrl,
       authType: this.currentAuth.type,
     };
   }
@@ -757,12 +884,85 @@ export class McpOpenApiServer {
     };
   }
 
-  async run(): Promise<void> {
+  async run(watch = false): Promise<void> {
     await this.initialize();
+
+    if (watch && !this.config.openApiPath.startsWith("http")) {
+      this.startWatcher();
+    }
+
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
     process.stderr.write(
-      `[mcp-openapi] Server started. Spec: ${this.config.openApiPath}, Base URL: ${this.activeBaseUrl}, Tools: ${this.tools.length}\n`
+      `[mcp-openapi] Server started. Spec: ${this.config.openApiPath}, Base URL: ${this.activeBaseUrl}, Tools: ${this.tools.length}${watch ? " [watch]" : ""}\n`
     );
   }
+
+  private startWatcher(): void {
+    const specPath = this.config.openApiPath;
+    try {
+      this.fileWatcher = fs.watch(specPath, { persistent: false }, async (event) => {
+        if (event !== "change") return;
+        process.stderr.write(
+          `[mcp-openapi] Spec file changed, reloading: ${specPath}\n`
+        );
+        try {
+          this.spec = await loadOpenApiSpec(specPath);
+          this.tools = generateTools(
+            this.spec,
+            this.config.toolPrefix,
+            this.config.include,
+            this.config.exclude
+          );
+          process.stderr.write(
+            `[mcp-openapi] Spec reloaded. Tools: ${this.tools.length}\n`
+          );
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          process.stderr.write(
+            `[mcp-openapi] Failed to reload spec: ${msg}\n`
+          );
+        }
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(
+        `[mcp-openapi] Warning: Could not watch spec file: ${msg}\n`
+      );
+    }
+  }
+
+  stopWatcher(): void {
+    this.fileWatcher?.close();
+    this.fileWatcher = undefined;
+  }
+}
+
+/**
+ * Build an AuthConfig from an EnvConfig entry (used by switch_env).
+ */
+function buildAuthFromEnvEntry(entry: EnvConfig): AuthConfig | undefined {
+  const authType = entry.authType;
+  if (!authType || authType === "none") {
+    return authType === "none" ? { type: "none" } : undefined;
+  }
+  if (authType === "bearer") {
+    return { type: "bearer", ...(entry.token ? { token: entry.token } : {}) };
+  }
+  if (authType === "basic") {
+    return {
+      type: "basic",
+      ...(entry.username ? { username: entry.username } : {}),
+      ...(entry.password ? { password: entry.password } : {}),
+    };
+  }
+  if (authType === "apikey") {
+    return {
+      type: "apikey",
+      ...(entry.apiKey ? { apiKey: entry.apiKey } : {}),
+      ...(entry.apiKeyHeader ? { apiKeyHeader: entry.apiKeyHeader } : {}),
+      ...(entry.apiKeyQueryParam ? { apiKeyQueryParam: entry.apiKeyQueryParam } : {}),
+    };
+  }
+  return undefined;
 }

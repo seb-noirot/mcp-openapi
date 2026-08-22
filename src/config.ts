@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as yaml from "js-yaml";
-import { AuthConfig, DefinedServerConfig, EnvConfig, ServerConfig } from "./types";
+import { AuthConfig, DefinedServerConfig, EnvConfig, FilterRule, ServerConfig } from "./types";
 
 interface RawServerConfigFile {
   openApiPath?: string;
@@ -11,6 +11,12 @@ interface RawServerConfigFile {
   servers?: Array<string | DefinedServerConfig>;
   envs?: Record<string, EnvConfig>;
   env?: string;
+  include?: FilterRule[];
+  exclude?: FilterRule[];
+  maxResponseBodyBytes?: number;
+  timeout?: number;
+  retries?: number;
+  retryOn?: number[];
 }
 
 export function loadConfigFile(configPath: string, envOverride?: string): Partial<ServerConfig> {
@@ -24,33 +30,90 @@ export function loadConfigFile(configPath: string, envOverride?: string): Partia
   const envResult = resolveEnvConfig(config.envs, envOverride ?? config.env);
 
   return {
-    openApiPath: resolveConfigOpenApiPath(config.openApiPath, configDir),
+    openApiPath: resolveConfigOpenApiPath(
+      interpolateEnvVars(config.openApiPath),
+      configDir
+    ),
     serverIndex: config.serverIndex,
     toolPrefix: config.toolPrefix,
-    auth: envResult?.auth ?? config.auth,
+    auth: envResult?.auth ?? interpolateAuth(config.auth),
     servers: envResult?.servers ?? normalizeDefinedServers(config.servers),
+    include: config.include,
+    exclude: config.exclude,
+    maxResponseBodyBytes: config.maxResponseBodyBytes,
+    timeout: envResult?.timeout ?? config.timeout,
+    retries: envResult?.retries ?? config.retries,
+    retryOn: envResult?.retryOn ?? config.retryOn,
+    envs: config.envs,
+  };
+}
+
+/**
+ * Interpolate ${VAR_NAME} placeholders in a string using process.env.
+ */
+export function interpolateEnvVars(value: string | undefined): string | undefined {
+  if (!value) return value;
+  return value.replace(/\$\{([^}]+)\}/g, (_, name: string) => {
+    return process.env[name] ?? "";
+  });
+}
+
+function interpolateAuth(auth: AuthConfig | undefined): AuthConfig | undefined {
+  if (!auth) return undefined;
+  return {
+    type: auth.type,
+    ...(auth.username !== undefined ? { username: interpolateEnvVars(auth.username) } : {}),
+    ...(auth.password !== undefined ? { password: interpolateEnvVars(auth.password) } : {}),
+    ...(auth.token !== undefined ? { token: interpolateEnvVars(auth.token) } : {}),
+    ...(auth.apiKey !== undefined ? { apiKey: interpolateEnvVars(auth.apiKey) } : {}),
+    ...(auth.apiKeyHeader !== undefined ? { apiKeyHeader: interpolateEnvVars(auth.apiKeyHeader) } : {}),
+    ...(auth.apiKeyQueryParam !== undefined
+      ? { apiKeyQueryParam: interpolateEnvVars(auth.apiKeyQueryParam) }
+      : {}),
+  };
+}
+
+function interpolateEnvConfig(entry: EnvConfig): EnvConfig {
+  return {
+    url: interpolateEnvVars(entry.url) ?? entry.url,
+    ...(entry.authType !== undefined ? { authType: entry.authType } : {}),
+    ...(entry.username !== undefined ? { username: interpolateEnvVars(entry.username) } : {}),
+    ...(entry.password !== undefined ? { password: interpolateEnvVars(entry.password) } : {}),
+    ...(entry.token !== undefined ? { token: interpolateEnvVars(entry.token) } : {}),
+    ...(entry.apiKey !== undefined ? { apiKey: interpolateEnvVars(entry.apiKey) } : {}),
+    ...(entry.apiKeyHeader !== undefined ? { apiKeyHeader: interpolateEnvVars(entry.apiKeyHeader) } : {}),
+    ...(entry.apiKeyQueryParam !== undefined
+      ? { apiKeyQueryParam: interpolateEnvVars(entry.apiKeyQueryParam) }
+      : {}),
+    ...(entry.timeout !== undefined ? { timeout: entry.timeout } : {}),
+    ...(entry.retries !== undefined ? { retries: entry.retries } : {}),
+    ...(entry.retryOn !== undefined ? { retryOn: entry.retryOn } : {}),
   };
 }
 
 function resolveEnvConfig(
   envs: Record<string, EnvConfig> | undefined,
   envName: string | undefined
-): { auth?: AuthConfig; servers?: DefinedServerConfig[] } | undefined {
+): { auth?: AuthConfig; servers?: DefinedServerConfig[]; timeout?: number; retries?: number; retryOn?: number[] } | undefined {
   if (!envs || Object.keys(envs).length === 0) {
     return undefined;
   }
 
   const name = envName ?? Object.keys(envs)[0];
-  const entry = envs[name];
-  if (!entry) {
+  const raw = envs[name];
+  if (!raw) {
     throw new Error(`Environment "${name}" not found in config. Available: ${Object.keys(envs).join(", ")}`);
   }
 
+  const entry = interpolateEnvConfig(raw);
   const auth = buildAuthFromEnvConfig(entry);
 
   return {
     auth,
     servers: [{ url: entry.url, ...(auth ? { auth } : {}) }],
+    ...(entry.timeout !== undefined ? { timeout: entry.timeout } : {}),
+    ...(entry.retries !== undefined ? { retries: entry.retries } : {}),
+    ...(entry.retryOn !== undefined ? { retryOn: entry.retryOn } : {}),
   };
 }
 
@@ -131,10 +194,10 @@ function normalizeDefinedServers(
     typeof server === "string"
       ? { url: server }
       : {
-          url: server.url,
+          url: interpolateEnvVars(server.url) ?? server.url,
           ...(server.name ? { name: server.name } : {}),
           ...(server.description ? { description: server.description } : {}),
-          ...(server.auth ? { auth: server.auth } : {}),
+          ...(server.auth ? { auth: interpolateAuth(server.auth) } : {}),
         }
   );
 }

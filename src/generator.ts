@@ -1,4 +1,5 @@
 import {
+  FilterRule,
   McpToolDefinition,
   OpenApiParameter,
   OpenApiSchema,
@@ -228,7 +229,9 @@ export function extractRequestBodySchema(
  */
 export function generateTools(
   spec: OpenApiSpec,
-  toolPrefix?: string
+  toolPrefix?: string,
+  include?: FilterRule[],
+  exclude?: FilterRule[]
 ): McpToolDefinition[] {
   const tools: McpToolDefinition[] = [];
   const usedNames = new Set<string>();
@@ -243,6 +246,11 @@ export function generateTools(
 
       const op = operation as import("./types").OpenApiOperation;
       if (op.deprecated) continue;
+
+      // Apply include/exclude filters
+      if (!matchesFilter(method, path, op.operationId, op.tags, include, exclude)) {
+        continue;
+      }
 
       const allParameters = [
         ...pathLevelParameters,
@@ -281,4 +289,40 @@ export function generateTools(
   }
 
   return tools;
+}
+
+/**
+ * Return true if the operation should be included given include/exclude rules.
+ *
+ * - include rules: at least one rule must match (if any rules are specified).
+ * - exclude rules: none of the rules may match.
+ * A rule matches if ALL of the specified fields match (tag, method, operationId are ANDed).
+ */
+function matchesFilter(
+  method: string,
+  _path: string,
+  operationId: string | undefined,
+  tags: string[] | undefined,
+  include: FilterRule[] | undefined,
+  exclude: FilterRule[] | undefined
+): boolean {
+  const upperMethod = method.toUpperCase();
+  const lowerTags = (tags ?? []).map((t) => t.toLowerCase());
+
+  const ruleMatches = (rule: FilterRule): boolean => {
+    if (rule.method && rule.method.toUpperCase() !== upperMethod) return false;
+    if (rule.operationId && rule.operationId !== operationId) return false;
+    if (rule.tag && !lowerTags.includes(rule.tag.toLowerCase())) return false;
+    return true;
+  };
+
+  if (include && include.length > 0) {
+    if (!include.some(ruleMatches)) return false;
+  }
+
+  if (exclude && exclude.length > 0) {
+    if (exclude.some(ruleMatches)) return false;
+  }
+
+  return true;
 }
