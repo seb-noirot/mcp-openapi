@@ -1,0 +1,122 @@
+/**
+ * Types for the mcp-openapi server
+ */
+
+export interface AuthConfig {
+  type: "none" | "basic" | "bearer" | "apikey";
+  username?: string;
+  password?: string;
+  token?: string;
+  apiKey?: string;
+  apiKeyHeader?: string;
+  apiKeyQueryParam?: string;
+}
+
+export interface ServerConfig {
+  openApiPath: string;
+  servers?: string[];
+  auth?: AuthConfig;
+  serverIndex?: number;
+}
+
+export interface OpenApiInfo {
+  title: string;
+  version: string;
+  description?: string;
+}
+
+export interface OpenApiServer {
+  url: string;
+  description?: string;
+}
+
+export interface OpenApiParameter {
+  name: string;
+  in: "query" | "path" | "header" | "cookie";
+  description?: string;
+  required?: boolean;
+  schema?: OpenApiSchema;
+}
+
+export interface OpenApiSchema {
+  type?: string;
+  format?: string;
+  description?: string;
+  enum?: unknown[];
+  items?: OpenApiSchema;
+  properties?: Record<string, OpenApiSchema>;
+  required?: string[];
+  $ref?: string;
+  allOf?: OpenApiSchema[];
+  oneOf?: OpenApiSchema[];
+  anyOf?: OpenApiSchema[];
+  minimum?: number;
+  maximum?: number;
+  minLength?: number;
+  maxLength?: number;
+  default?: unknown;
+  example?: unknown;
+}
+
+export interface OpenApiRequestBody {
+  description?: string;
+  required?: boolean;
+  content?: Record<string, { schema?: OpenApiSchema }>;
+}
+
+export interface OpenApiOperation {
+  operationId?: string;
+  summary?: string;
+  description?: string;
+  tags?: string[];
+  parameters?: OpenApiParameter[];
+  requestBody?: OpenApiRequestBody;
+  responses?: Record<string, { description?: string }>;
+  deprecated?: boolean;
+  security?: Record<string, string[]>[];
+}
+
+export type OpenApiPathItem = {
+  parameters?: OpenApiParameter[];
+} & {
+  [method: string]: OpenApiOperation | OpenApiParameter[] | undefined;
+};
+
+export interface OpenApiPaths {
+  [path: string]: OpenApiPathItem;
+}
+
+export interface OpenApiComponents {
+  schemas?: Record<string, OpenApiSchema>;
+  securitySchemes?: Record<string, OpenApiSecurityScheme>;
+}
+
+export interface OpenApiSecurityScheme {
+  type: string;
+  scheme?: string;
+  bearerFormat?: string;
+  in?: string;
+  name?: string;
+  description?: string;
+}
+
+export interface OpenApiSpec {
+  openapi?: string;
+  swagger?: string;
+  info: OpenApiInfo;
+  servers?: OpenApiServer[];
+  paths: OpenApiPaths;
+  components?: OpenApiComponents;
+  security?: Record<string, string[]>[];
+}
+
+export interface McpToolDefinition {
+  method: string;
+  path: string;
+  operationId: string;
+  name: string;
+  description: string;
+  parameters: OpenApiParameter[];
+  requestBody?: OpenApiRequestBody;
+  tags?: string[];
+}
