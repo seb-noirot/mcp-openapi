@@ -35,7 +35,7 @@ describe("McpOpenApiServer", () => {
     const config: ServerConfig = {
       openApiPath: specPath,
       toolPrefix: "petstore",
-      serverIndex: 1,
+      serverIndex: 5,
       servers: [
         { url: "https://api.one.example", auth: { type: "basic", username: "u", password: "p" } },
         { url: "https://api.two.example", name: "secondary", auth: { type: "bearer", token: "t" } },
@@ -57,6 +57,7 @@ describe("McpOpenApiServer", () => {
       ])
     );
     expect(info["authType"]).toBe("bearer");
+    expect(info["activeServerIndex"]).toBe(1);
     expect(info["activeBaseUrl"]).toBe("https://api.two.example");
     expect(info["toolPrefix"]).toBe("petstore_");
     expect(info["definedServers"]).toEqual(

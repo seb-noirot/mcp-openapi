@@ -66,7 +66,9 @@ function parseArgs(args: string[]): { config: ServerConfig; remaining: string[] 
       args[i] === "--api-key-header" ||
       args[i] === "--api-key-query-param"
     ) {
-      i++; // skip value, handled by parseAuthConfig
+      if (i + 1 < args.length) {
+        i++; // skip value, handled by parseAuthConfig
+      }
     } else if (!args[i].startsWith("--")) {
       openApiPath = args[i];
     } else {

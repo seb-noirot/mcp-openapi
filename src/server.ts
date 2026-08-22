@@ -71,7 +71,7 @@ export class McpOpenApiServer {
     // 1. Explicit servers from config
     if (this.config.servers && this.config.servers.length > 0) {
       const idx = this.config.serverIndex ?? 0;
-      this.selectedServerIndex = idx >= 0 ? idx : 0;
+      this.selectedServerIndex = this.clampServerIndex(idx, this.config.servers.length);
       this.selectedServerSource = "config";
       return this.config.servers[this.selectedServerIndex]?.url ?? this.config.servers[0].url;
     }
@@ -79,9 +79,9 @@ export class McpOpenApiServer {
     // 2. Servers from spec
     if (this.spec.servers && this.spec.servers.length > 0) {
       const idx = this.config.serverIndex ?? 0;
-      this.selectedServerIndex = idx >= 0 ? idx : 0;
+      this.selectedServerIndex = this.clampServerIndex(idx, this.spec.servers.length);
       this.selectedServerSource = "spec";
-      return this.spec.servers[idx]?.url ?? this.spec.servers[0].url;
+      return this.spec.servers[this.selectedServerIndex]?.url ?? this.spec.servers[0].url;
     }
 
     this.selectedServerIndex = 0;
@@ -99,6 +99,18 @@ export class McpOpenApiServer {
     }
 
     return { type: "none" };
+  }
+
+  private clampServerIndex(index: number, length: number): number {
+    if (length <= 0) {
+      return 0;
+    }
+
+    if (index < 0) {
+      return 0;
+    }
+
+    return Math.min(index, length - 1);
   }
 
   private setupHandlers(): void {
@@ -351,9 +363,18 @@ export class McpOpenApiServer {
   }
 
   private handleGetSetup(): Record<string, unknown> {
+    const snapshot = this.getInfoSnapshot();
+    const definedServers = snapshot["definedServers"];
+
     return {
-      ...this.getInfoSnapshot(),
-      availableServers: this.getDefinedServers().map((server) => server["url"]),
+      ...snapshot,
+      availableServers: Array.isArray(definedServers)
+        ? definedServers.map((server) =>
+            typeof server === "object" && server !== null
+              ? (server as Record<string, unknown>)["url"]
+              : undefined
+          )
+        : [],
     };
   }
 
