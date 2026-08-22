@@ -193,8 +193,8 @@ Each environment entry supports all auth types:
 | Field             | Description                                         |
 |-------------------|-----------------------------------------------------|
 | `url`             | Base URL for this environment (required)            |
-| `authType`       | `none` \| `basic` \| `bearer` \| `apikey`           |
-| `token`           | ****** (for `bearer`)                         |
+| `authType`       | `none` \| `basic` \| `bearer` \| `apikey` \| `oauth2` \| `openidconnect` \| `cookie` |
+| `token`           | Access token (for `bearer`, `oauth2`, `openidconnect`) |
 | `username`        | Username (for `basic`)                              |
 | `password`        | Password (for `basic`)                              |
 | `apiKey`          | API key value (for `apikey`)                        |
@@ -336,7 +336,7 @@ Or in a config file:
 }
 ```
 
-If `retryOn` is omitted, retries apply to any error. Back-off starts at 200 ms and doubles with each attempt.
+If `retryOn` is omitted, retries apply to HTTP `429` and `5xx` responses for safe methods (`GET`, `HEAD`, `OPTIONS`). Network errors are retried for those same safe methods. Back-off starts at 200 ms and doubles with each attempt.
 
 ---
 

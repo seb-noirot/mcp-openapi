@@ -169,6 +169,29 @@ describe("loadConfigFile", () => {
       expect(config.auth?.apiKeyHeader).toBe("X-API-Key");
     });
 
+    it("should handle oauth2 auth in envs", () => {
+      const configPath = path.join(tmpDir, "envs-oauth2.json");
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          openApiPath: "https://example.com/openapi.json",
+          envs: {
+            dev: {
+              url: "https://dev.api.example.com",
+              authType: "oauth2",
+              token: "oauth-token",
+              scopes: ["read", "write"],
+            },
+          },
+        })
+      );
+
+      const config = loadConfigFile(configPath);
+      expect(config.auth?.type).toBe("oauth2");
+      expect(config.auth?.token).toBe("oauth-token");
+      expect(config.auth?.scopes).toEqual(["read", "write"]);
+    });
+
     it("should throw when the specified env does not exist", () => {
       const configPath = path.join(tmpDir, "envs-missing.json");
       fs.writeFileSync(

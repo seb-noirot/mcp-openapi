@@ -111,7 +111,7 @@ describe("resolveServerVariables", () => {
       variables: { host: {} },
     };
     const resolved = resolveServerVariables(server);
-    // Variable with no default resolves to empty string
+    // Variable with no default resolves to the variable name
     expect(resolved.url).toBe("https://host/api");
   });
 });

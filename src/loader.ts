@@ -141,7 +141,7 @@ function normalizeSwagger2(raw: OpenApiSpec): OpenApiSpec {
   }
 
   return {
-    openapi: "2.x-normalised",
+    openapi: "3.0.0",
     info: s.info ?? { title: "Unknown", version: "0" },
     servers,
     paths,

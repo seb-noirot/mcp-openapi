@@ -59,6 +59,7 @@ describe("McpOpenApiServer", () => {
         "petstore_explain_operation",
         "petstore_explain_auth",
         "petstore_get_operation_schema",
+        "petstore_paginate_operation",
       ])
     );
     expect(info["authType"]).toBe("bearer");
@@ -281,6 +282,9 @@ describe("McpOpenApiServer", () => {
       expect(guide).toHaveProperty("basic");
       expect(guide).toHaveProperty("bearer");
       expect(guide).toHaveProperty("apikey");
+      expect(guide).toHaveProperty("oauth2");
+      expect(guide).toHaveProperty("openidconnect");
+      expect(guide).toHaveProperty("cookie");
     });
 
     it("includes spec security schemes", async () => {
@@ -566,6 +570,61 @@ describe("McpOpenApiServer", () => {
       const snapshot = (server as any).getInfoSnapshot() as Record<string, unknown>;
       expect(snapshot["activeBaseUrl"]).toBe("https://api.example.com");
       expect(snapshot["activeEnv"]).toBe("prod");
+    });
+
+    describe("safety and pagination", () => {
+      it("requires confirmation for destructive methods when enabled", async () => {
+        const specPath = writeSpec("spec-safety-delete.json", {
+          openapi: "3.0.0",
+          info: { title: "T", version: "1" },
+          paths: {
+            "/pets/{id}": {
+              delete: {
+                operationId: "deletePet",
+                parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+                responses: { "204": { description: "ok" } },
+              },
+            },
+          },
+        });
+        const config: ServerConfig = {
+          openApiPath: specPath,
+          safety: { requireConfirmForDestructive: true, destructiveMethods: ["DELETE"] },
+        };
+        const server = new McpOpenApiServer(config);
+        await server.initialize();
+
+        expect(() => (server as any).assertSafetyRules((server as any).tools[0], { id: "a" })).toThrow(
+          /requires.*confirm/
+        );
+        expect(() =>
+          (server as any).assertSafetyRules((server as any).tools[0], { id: "a", confirm: true })
+        ).not.toThrow();
+      });
+
+      it("blocks denied methods", async () => {
+        const specPath = writeSpec("spec-safety-get.json", {
+          openapi: "3.0.0",
+          info: { title: "T", version: "1" },
+          paths: {
+            "/pets": {
+              get: {
+                operationId: "listPets",
+                responses: { "200": { description: "ok" } },
+              },
+            },
+          },
+        });
+        const config: ServerConfig = {
+          openApiPath: specPath,
+          safety: { denyMethods: ["GET"] },
+        };
+        const server = new McpOpenApiServer(config);
+        await server.initialize();
+        expect(() => (server as any).assertSafetyRules((server as any).tools[0], {})).toThrow(
+          /blocked method GET/
+        );
+      });
     });
   });
 });

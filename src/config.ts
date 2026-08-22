@@ -136,7 +136,7 @@ function resolveEnvConfig(
   };
 }
 
-function buildAuthFromEnvConfig(entry: EnvConfig): AuthConfig | undefined {
+export function buildAuthFromEnvConfig(entry: EnvConfig): AuthConfig | undefined {
   const authType = entry.authType;
   if (!authType || authType === "none") {
     return authType === "none" ? { type: "none" } : undefined;

@@ -42,6 +42,34 @@ describe("parseAuthConfig", () => {
     expect(auth.apiKeyHeader).toBe("X-API-Key");
   });
 
+  it("should parse oauth2 auth from args", () => {
+    const auth = parseAuthConfig([
+      "--auth-type",
+      "oauth2",
+      "--auth-token",
+      "oauth-token",
+      "--auth-scopes",
+      "read,write",
+    ]);
+    expect(auth.type).toBe("oauth2");
+    expect(auth.token).toBe("oauth-token");
+    expect(auth.scopes).toEqual(["read", "write"]);
+  });
+
+  it("should parse cookie auth from args", () => {
+    const auth = parseAuthConfig([
+      "--auth-type",
+      "cookie",
+      "--cookie-name",
+      "session",
+      "--cookie-value",
+      "abc123",
+    ]);
+    expect(auth.type).toBe("cookie");
+    expect(auth.cookieName).toBe("session");
+    expect(auth.cookieValue).toBe("abc123");
+  });
+
   it("should fall back to environment variables", () => {
     process.env["AUTH_TYPE"] = "bearer";
     process.env["AUTH_TOKEN"] = "envtoken";

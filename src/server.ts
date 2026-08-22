@@ -8,6 +8,7 @@ import * as fs from "fs";
 import { AxiosInstance } from "axios";
 import { createHash } from "crypto";
 import { loadOpenApiSpec } from "./loader";
+import { buildAuthFromEnvConfig } from "./config";
 import {
   generateTools,
   buildInputSchema,
@@ -20,7 +21,6 @@ import { executeToolCall } from "./executor";
 import {
   AuthConfig,
   DefinedServerConfig,
-  EnvConfig,
   McpToolDefinition,
   OpenApiOperation,
   OpenApiSpec,
@@ -195,8 +195,7 @@ export class McpOpenApiServer {
     if (!limit) return text;
     const bytes = Buffer.byteLength(text, "utf8");
     if (bytes <= limit) return text;
-    // Truncate to byte limit (UTF-8 safe)
-    const truncated = Buffer.from(text, "utf8").slice(0, limit).toString("utf8");
+    const truncated = truncateUtf8ToBytes(text, limit);
     return `${truncated}\n…[truncated: response exceeded ${limit} bytes]`;
   }
 
@@ -370,6 +369,10 @@ export class McpOpenApiServer {
             nextTokenField: {
               type: "string",
               description: "Field name from response data carrying next cursor/token",
+            },
+            dataField: {
+              type: "string",
+              description: "Field name containing list items when using page-based pagination (default: items)",
             },
             tokenParam: {
               type: "string",
@@ -655,7 +658,7 @@ export class McpOpenApiServer {
     this.selectedServerIndex = 0;
 
     // Build auth from the env entry
-    const authFromEnv = buildAuthFromEnvEntry(entry);
+    const authFromEnv = buildAuthFromEnvConfig(entry);
     this.currentAuth = authFromEnv ?? { type: "none" };
 
     this.httpClient = createHttpClient(this.activeBaseUrl, this.currentAuth, {
@@ -877,7 +880,7 @@ export class McpOpenApiServer {
           },
         },
         bearer: {
-          description: "HTTP ****** authentication. Sends token in the Authorization header.",
+          description: "HTTP access-token authentication. Sends token in the Authorization header.",
           fields: {
             type: "bearer",
             token: "Your bearer token",
@@ -1000,6 +1003,7 @@ export class McpOpenApiServer {
     const limit = args["limit"];
     const nextTokenField =
       typeof args["nextTokenField"] === "string" ? args["nextTokenField"] : undefined;
+    const dataField = typeof args["dataField"] === "string" ? args["dataField"] : "items";
     const tokenParam = typeof args["tokenParam"] === "string" ? args["tokenParam"] : undefined;
     const baseArgs =
       args["args"] && typeof args["args"] === "object" && !Array.isArray(args["args"])
@@ -1014,7 +1018,7 @@ export class McpOpenApiServer {
       const callArgs: Record<string, unknown> = { ...baseArgs };
       if (tokenParam && nextToken !== undefined) {
         callArgs[tokenParam] = nextToken;
-      } else {
+      } else if (!tokenParam) {
         callArgs[pageParam] = pageNumber;
       }
       if (limitParam && limit !== undefined) {
@@ -1037,8 +1041,8 @@ export class McpOpenApiServer {
         if (nextToken === undefined || nextToken === null || nextToken === "") break;
       } else {
         const hasItems =
-          Array.isArray((data as Record<string, unknown> | undefined)?.["items"]) &&
-          ((data as Record<string, unknown>)["items"] as unknown[]).length > 0;
+          Array.isArray((data as Record<string, unknown> | undefined)?.[dataField]) &&
+          ((data as Record<string, unknown>)[dataField] as unknown[]).length > 0;
         if (!hasItems) {
           break;
         }
@@ -1072,7 +1076,7 @@ export class McpOpenApiServer {
       throw new Error(`Safety policy blocked path ${tool.path}`);
     }
 
-    const destructiveMethods = (safety.destructiveMethods ?? ["DELETE", "POST"]).map((m) =>
+    const destructiveMethods = (safety.destructiveMethods ?? ["DELETE"]).map((m) =>
       m.toUpperCase()
     );
     if (safety.requireConfirmForDestructive && destructiveMethods.includes(method)) {
@@ -1153,7 +1157,7 @@ export class McpOpenApiServer {
     await this.initialize();
 
     if (watch) {
-      if (!this.config.openApiPath.startsWith("http")) {
+      if (!isRemoteSource(this.config.openApiPath)) {
         this.startWatcher();
       } else {
         this.startRemoteSpecPolling();
@@ -1217,45 +1221,16 @@ export class McpOpenApiServer {
   }
 }
 
-/**
- * Build an AuthConfig from an EnvConfig entry (used by switch_env).
- */
-function buildAuthFromEnvEntry(entry: EnvConfig): AuthConfig | undefined {
-  const authType = entry.authType;
-  if (!authType || authType === "none") {
-    return authType === "none" ? { type: "none" } : undefined;
+function truncateUtf8ToBytes(text: string, limit: number): string {
+  const encoded = Buffer.from(text, "utf8");
+  if (encoded.length <= limit) return text;
+  let decoded = encoded.subarray(0, limit).toString("utf8");
+  if (decoded.includes("\uFFFD")) {
+    decoded = decoded.replace(/\uFFFD+$/u, "");
   }
-  if (authType === "bearer") {
-    return { type: "bearer", ...(entry.token ? { token: entry.token } : {}) };
-  }
-  if (authType === "basic") {
-    return {
-      type: "basic",
-      ...(entry.username ? { username: entry.username } : {}),
-      ...(entry.password ? { password: entry.password } : {}),
-    };
-  }
-  if (authType === "apikey") {
-    return {
-      type: "apikey",
-      ...(entry.apiKey ? { apiKey: entry.apiKey } : {}),
-      ...(entry.apiKeyHeader ? { apiKeyHeader: entry.apiKeyHeader } : {}),
-      ...(entry.apiKeyQueryParam ? { apiKeyQueryParam: entry.apiKeyQueryParam } : {}),
-    };
-  }
-  if (authType === "oauth2" || authType === "openidconnect") {
-    return {
-      type: authType,
-      ...(entry.token ? { token: entry.token } : {}),
-      ...(entry.scopes ? { scopes: entry.scopes } : {}),
-    };
-  }
-  if (authType === "cookie") {
-    return {
-      type: "cookie",
-      ...(entry.cookieName ? { cookieName: entry.cookieName } : {}),
-      ...(entry.cookieValue ? { cookieValue: entry.cookieValue } : {}),
-    };
-  }
-  return undefined;
+  return decoded;
+}
+
+function isRemoteSource(source: string): boolean {
+  return source.startsWith("http://") || source.startsWith("https://");
 }

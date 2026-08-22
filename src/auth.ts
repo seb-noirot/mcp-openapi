@@ -53,7 +53,7 @@ export function createHttpClient(
   const includeRequestId = options?.includeRequestId ?? true;
 
   instance.interceptors.request.use((reqConfig) => {
-    const req = reqConfig as AxiosRequestConfig & {
+    const req = reqConfig as unknown as AxiosRequestConfig & {
       __requestMeta?: { requestId: string; startedAt: number; attempt: number };
     };
     req.__requestMeta = req.__requestMeta ?? {
@@ -70,7 +70,7 @@ export function createHttpClient(
         `request method=${String(req.method ?? "GET").toUpperCase()} url=${String(req.url ?? "")} requestId=${req.__requestMeta.requestId} attempt=${req.__requestMeta.attempt}`
       );
     }
-    return req;
+    return reqConfig;
   });
 
   if (!auth || auth.type === "none") {
@@ -167,10 +167,7 @@ function applyRetryInterceptor(
       if (!config) return Promise.reject(error);
 
       const attempt: number = config.__retryAttempt ?? 0;
-      const shouldRetry =
-        attempt < maxRetries &&
-        isRetryableMethod(config.method) &&
-        (retryOn.length === 0 || retryOn.includes(0));
+      const shouldRetry = attempt < maxRetries && isRetryableMethod(config.method);
 
       if (!shouldRetry) return Promise.reject(error);
 
@@ -272,33 +269,6 @@ export function parseAuthConfig(
     return { type: "none" };
   }
 
-  function randomRequestId(): string {
-    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-  }
-
-  function isRetryableMethod(method: string | undefined): boolean {
-    const normalized = String(method ?? "GET").toUpperCase();
-    return ["GET", "HEAD", "OPTIONS", "PUT", "DELETE"].includes(normalized);
-  }
-
-  function computeRetryDelayMs(attempt: number, retryAfterHeader?: string): number {
-    if (retryAfterHeader) {
-      const secs = Number(retryAfterHeader);
-      if (!Number.isNaN(secs) && secs >= 0) {
-        return Math.floor(secs * 1000);
-      }
-      const dateMs = Date.parse(retryAfterHeader);
-      if (!Number.isNaN(dateMs)) {
-        return Math.max(0, dateMs - Date.now());
-      }
-    }
-    return Math.pow(2, attempt) * 200;
-  }
-
-  function debugLog(message: string): void {
-    process.stderr.write(`[mcp-openapi][http] ${message}\n`);
-  }
-
   throw new Error(`Unsupported auth type: ${authType}`);
 }
 
@@ -308,4 +278,31 @@ function getArg(args: string[], flag: string): string | undefined {
     return args[idx + 1];
   }
   return undefined;
+}
+
+function randomRequestId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function isRetryableMethod(method: string | undefined): boolean {
+  const normalized = String(method ?? "GET").toUpperCase();
+  return ["GET", "HEAD", "OPTIONS"].includes(normalized);
+}
+
+function computeRetryDelayMs(attempt: number, retryAfterHeader?: string): number {
+  if (retryAfterHeader) {
+    const secs = Number(retryAfterHeader);
+    if (!Number.isNaN(secs) && secs >= 0) {
+      return Math.floor(secs * 1000);
+    }
+    const dateMs = Date.parse(retryAfterHeader);
+    if (!Number.isNaN(dateMs)) {
+      return Math.max(0, dateMs - Date.now());
+    }
+  }
+  return Math.pow(2, attempt) * 200;
+}
+
+function debugLog(message: string): void {
+  process.stderr.write(`[mcp-openapi][http] ${message}\n`);
 }
