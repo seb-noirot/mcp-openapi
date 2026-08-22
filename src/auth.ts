@@ -117,7 +117,11 @@ export function parseAuthConfig(
     };
   }
 
-  return { type: "none" };
+  if (authType === "none") {
+    return { type: "none" };
+  }
+
+  throw new Error(`Unsupported auth type: ${authType}`);
 }
 
 function getArg(args: string[], flag: string): string | undefined {

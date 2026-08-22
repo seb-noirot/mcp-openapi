@@ -57,4 +57,10 @@ describe("parseAuthConfig", () => {
     expect(auth.type).toBe("basic");
     expect(auth.username).toBe("user");
   });
+
+  it("should throw on unsupported auth types", () => {
+    expect(() => parseAuthConfig(["--auth-type", "oauth"])).toThrow(
+      "Unsupported auth type: oauth"
+    );
+  });
 });

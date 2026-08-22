@@ -14,18 +14,6 @@ describe("generateToolName", () => {
     expect(generateToolName("get", "/pets/{id}", "getPetById")).toBe("get_pet_by_id");
   });
 
-  describe("normalizeToolPrefix", () => {
-    it("should normalize and suffix the prefix", () => {
-      expect(normalizeToolPrefix("PetStore")).toBe("pet_store_");
-      expect(normalizeToolPrefix("pet-store")).toBe("pet_store_");
-    });
-
-    it("should return an empty string when prefix is missing", () => {
-      expect(normalizeToolPrefix(undefined)).toBe("");
-      expect(normalizeToolPrefix("")).toBe("");
-    });
-  });
-
   it("should handle operationIds with underscores and hyphens", () => {
     expect(generateToolName("get", "/", "get_users")).toBe("get_users");
     expect(generateToolName("get", "/", "get-users")).toBe("get_users");
@@ -40,6 +28,19 @@ describe("generateToolName", () => {
     const name = generateToolName("get", "/pets/{petId}");
     expect(name).toContain("get");
     expect(name).toContain("pet");
+  });
+});
+
+describe("normalizeToolPrefix", () => {
+  it("should normalize and suffix the prefix", () => {
+    expect(normalizeToolPrefix("PetStore")).toBe("pet_store_");
+    expect(normalizeToolPrefix("pet-store")).toBe("pet_store_");
+    expect(normalizeToolPrefix("ABC")).toBe("abc_");
+  });
+
+  it("should return an empty string when prefix is missing", () => {
+    expect(normalizeToolPrefix(undefined)).toBe("");
+    expect(normalizeToolPrefix("")).toBe("");
   });
 });
 
