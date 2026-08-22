@@ -49,13 +49,21 @@ function parseArgs(args: string[]): { config: ServerConfig } {
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--config" && i + 1 < args.length) {
-      configPath = args[++i];
+      configPath = consumeArgValue(args, ++i, "--config");
+    } else if (args[i] === "--config") {
+      throw new Error("Missing value for --config");
     } else if (args[i] === "--server" && i + 1 < args.length) {
-      servers.push(args[++i]);
+      servers.push(consumeArgValue(args, ++i, "--server"));
+    } else if (args[i] === "--server") {
+      throw new Error("Missing value for --server");
     } else if (args[i] === "--server-index" && i + 1 < args.length) {
-      serverIndex = parseInt(args[++i], 10);
+      serverIndex = parseInt(consumeArgValue(args, ++i, "--server-index"), 10);
+    } else if (args[i] === "--server-index") {
+      throw new Error("Missing value for --server-index");
     } else if (args[i] === "--tool-prefix" && i + 1 < args.length) {
-      toolPrefix = args[++i];
+      toolPrefix = consumeArgValue(args, ++i, "--tool-prefix");
+    } else if (args[i] === "--tool-prefix") {
+      throw new Error("Missing value for --tool-prefix");
     } else if (
       args[i] === "--auth-type" ||
       args[i] === "--auth-username" ||
@@ -65,9 +73,8 @@ function parseArgs(args: string[]): { config: ServerConfig } {
       args[i] === "--api-key-header" ||
       args[i] === "--api-key-query-param"
     ) {
-      if (i + 1 < args.length) {
-        i++; // skip value, handled by parseAuthConfig
-      }
+      consumeArgValue(args, i + 1, args[i]);
+      i++; // skip value, handled by parseAuthConfig
     } else if (!args[i].startsWith("--")) {
       openApiPath = args[i];
     } else {
@@ -99,6 +106,14 @@ function parseArgs(args: string[]): { config: ServerConfig } {
   };
 
   return { config };
+}
+
+function consumeArgValue(args: string[], valueIndex: number, flag: string): string {
+  const value = args[valueIndex];
+  if (value === undefined) {
+    throw new Error(`Missing value for ${flag}`);
+  }
+  return value;
 }
 
 async function main(): Promise<void> {

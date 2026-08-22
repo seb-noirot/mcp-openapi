@@ -12,7 +12,7 @@ import {
   extractRequestBodySchema,
   normalizeToolPrefix,
 } from "./generator";
-import { createHttpClient } from "./auth";
+import { createHttpClient, isSupportedAuthType } from "./auth";
 import { executeToolCall } from "./executor";
 import {
   AuthConfig,
@@ -380,7 +380,10 @@ export class McpOpenApiServer {
   }
 
   private handleSetAuth(args: Record<string, unknown>): unknown {
-    const authType = args["type"] as AuthConfig["type"];
+    const authType = args["type"];
+    if (!isSupportedAuthType(authType)) {
+      throw new Error(`Unsupported auth type: ${String(authType)}`);
+    }
 
     this.currentAuth = {
       type: authType,

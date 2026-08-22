@@ -14,6 +14,12 @@ interface ParseAuthConfigOptionalOptions extends ParseAuthConfigOptions {
   defaultToNone: false;
 }
 
+const SUPPORTED_AUTH_TYPES = ["none", "basic", "bearer", "apikey"] as const;
+
+export function isSupportedAuthType(value: unknown): value is AuthConfig["type"] {
+  return typeof value === "string" && SUPPORTED_AUTH_TYPES.includes(value as AuthConfig["type"]);
+}
+
 /**
  * Create an axios instance configured for the given auth and base URL.
  */
