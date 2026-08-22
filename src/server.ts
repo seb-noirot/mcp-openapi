@@ -678,7 +678,7 @@ export class McpOpenApiServer {
           },
         },
         bearer: {
-          description: "****** authentication (Authorization: ******",
+          description: "HTTP ****** authentication. Sends token in the Authorization header.",
           fields: {
             type: "bearer",
             token: "Your bearer token",

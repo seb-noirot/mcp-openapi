@@ -175,12 +175,15 @@ npx mcp-openapi ./openapi.json \
 
 ## Built-in Extra Tools
 
-| Tool             | Description                                                                                   |
-|------------------|-----------------------------------------------------------------------------------------------|
-| `discover_tools` | List all generated API tools. Optionally filter by `tag` or `method`.                        |
-| `get_info`       | Return the current OpenAPI, tool prefix, active server/auth, and the list of defined servers. |
-| `get_setup`      | Return the current server setup: spec source, base URL, auth type, spec info, and tool count. |
-| `set_auth`       | Update authentication configuration at runtime without restarting the server.                 |
+| Tool                    | Description                                                                                                           |
+|-------------------------|-----------------------------------------------------------------------------------------------------------------------|
+| `discover_tools`        | List all generated API tools. Optionally filter by `tag` or `method`.                                                |
+| `get_info`              | Return the current OpenAPI, tool prefix, active server/auth, and the list of defined servers.                        |
+| `get_setup`             | Return the current server setup: spec source, base URL, auth type, spec info, and tool count.                        |
+| `set_auth`              | Update authentication configuration at runtime without restarting the server.                                         |
+| `explain_operation`     | Return a full breakdown of an operation: method, path, parameters, request body, response schemas, and auth requirements. Look up by tool name, operationId, or path+method. |
+| `explain_auth`          | Return the active auth config, all security schemes in the spec, global security requirements, and a configuration guide for all supported auth types. |
+| `get_operation_schema`  | Return the raw JSON schemas for a specific operation's request body and all response bodies. Useful for building integration code. |
 
 When `--tool-prefix` or `toolPrefix` is set, the same prefix is applied to built-in tools and generated API tools (for example `petstore_get_info` or `petstore_list_pets`).
 
