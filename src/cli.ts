@@ -90,6 +90,10 @@ function parseArgs(args: string[]): { config: ServerConfig } {
   }
 
   const fileConfig = configPath ? loadConfigFile(configPath, envName) : {};
+
+  if (envName && !configPath) {
+    throw new Error("--env requires --config to be specified");
+  }
   const cliAuth = parseAuthConfig(args, {
     defaultToNone: false,
     includeEnvironment: false,

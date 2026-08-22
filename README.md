@@ -134,17 +134,17 @@ Use the `envs` key to define named environments, each with its own URL and authe
   "envs": {
     "dev": {
       "url": "https://dev.api.example.com",
-      "auth_type": "bearer",
+      "authType": "bearer",
       "token": "DEV_TOKEN"
     },
     "staging": {
       "url": "https://staging.api.example.com",
-      "auth_type": "bearer",
+      "authType": "bearer",
       "token": "STAGING_TOKEN"
     },
     "prod": {
       "url": "https://api.example.com",
-      "auth_type": "bearer",
+      "authType": "bearer",
       "token": "PROD_TOKEN"
     }
   }
@@ -164,7 +164,7 @@ Each environment entry supports all auth types:
 | Field             | Description                                         |
 |-------------------|-----------------------------------------------------|
 | `url`             | Base URL for this environment (required)            |
-| `auth_type`       | `none` \| `basic` \| `bearer` \| `apikey`           |
+| `authType`       | `none` \| `basic` \| `bearer` \| `apikey`           |
 | `token`           | ****** (for `bearer`)                         |
 | `username`        | Username (for `basic`)                              |
 | `password`        | Password (for `basic`)                              |

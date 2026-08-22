@@ -68,8 +68,8 @@ describe("loadConfigFile", () => {
           openApiPath: "https://example.com/openapi.json",
           env: "staging",
           envs: {
-            dev: { url: "https://dev.api.example.com", auth_type: "bearer", token: "dev-token" },
-            staging: { url: "https://staging.api.example.com", auth_type: "bearer", token: "staging-token" },
+            dev: { url: "https://dev.api.example.com", authType: "bearer", token: "dev-token" },
+            staging: { url: "https://staging.api.example.com", authType: "bearer", token: "staging-token" },
           },
         })
       );
@@ -90,8 +90,8 @@ describe("loadConfigFile", () => {
           openApiPath: "https://example.com/openapi.json",
           env: "dev",
           envs: {
-            dev: { url: "https://dev.api.example.com", auth_type: "bearer", token: "dev-token" },
-            prod: { url: "https://api.example.com", auth_type: "bearer", token: "prod-token" },
+            dev: { url: "https://dev.api.example.com", authType: "bearer", token: "dev-token" },
+            prod: { url: "https://api.example.com", authType: "bearer", token: "prod-token" },
           },
         })
       );
@@ -109,7 +109,7 @@ describe("loadConfigFile", () => {
         JSON.stringify({
           openApiPath: "https://example.com/openapi.json",
           envs: {
-            dev: { url: "https://dev.api.example.com", auth_type: "none" },
+            dev: { url: "https://dev.api.example.com", authType: "none" },
             prod: { url: "https://api.example.com" },
           },
         })
@@ -130,7 +130,7 @@ describe("loadConfigFile", () => {
           envs: {
             dev: {
               url: "https://dev.api.example.com",
-              auth_type: "basic",
+              authType: "basic",
               username: "admin",
               password: "secret",
             },
@@ -154,7 +154,7 @@ describe("loadConfigFile", () => {
           envs: {
             dev: {
               url: "https://dev.api.example.com",
-              auth_type: "apikey",
+              authType: "apikey",
               apiKey: "mykey",
               apiKeyHeader: "X-API-Key",
             },

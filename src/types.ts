@@ -14,7 +14,7 @@ export interface AuthConfig {
 
 export interface EnvConfig {
   url: string;
-  auth_type?: "none" | "basic" | "bearer" | "apikey";
+  authType?: "none" | "basic" | "bearer" | "apikey";
   username?: string;
   password?: string;
   token?: string;
