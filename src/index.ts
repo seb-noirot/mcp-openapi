@@ -3,7 +3,7 @@ export { loadOpenApiSpec } from "./loader";
 export { loadConfigFile } from "./config";
 export { generateTools, generateToolName, buildInputSchema } from "./generator";
 export { createHttpClient, parseAuthConfig, isSupportedAuthType } from "./auth";
-export { executeToolCall } from "./executor";
+export { executeToolCall, getToolInputSchema, getVisibleParameters } from "./executor";
 export type {
   AuthConfig,
   DefinedServerConfig,
