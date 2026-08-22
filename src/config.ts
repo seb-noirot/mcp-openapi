@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as yaml from "js-yaml";
-import { AuthConfig, DefinedServerConfig, ServerConfig } from "./types";
+import { AuthConfig, DefinedServerConfig, EnvConfig, ServerConfig } from "./types";
 
 interface RawServerConfigFile {
   openApiPath?: string;
@@ -9,9 +9,11 @@ interface RawServerConfigFile {
   toolPrefix?: string;
   auth?: AuthConfig;
   servers?: Array<string | DefinedServerConfig>;
+  envs?: Record<string, EnvConfig>;
+  env?: string;
 }
 
-export function loadConfigFile(configPath: string): Partial<ServerConfig> {
+export function loadConfigFile(configPath: string, envOverride?: string): Partial<ServerConfig> {
   const absolutePath = path.isAbsolute(configPath)
     ? configPath
     : path.resolve(process.cwd(), configPath);
@@ -19,13 +21,67 @@ export function loadConfigFile(configPath: string): Partial<ServerConfig> {
   const config = parseConfigContent(rawContent, absolutePath);
   const configDir = path.dirname(absolutePath);
 
+  const envResult = resolveEnvConfig(config.envs, envOverride ?? config.env);
+
   return {
     openApiPath: resolveConfigOpenApiPath(config.openApiPath, configDir),
     serverIndex: config.serverIndex,
     toolPrefix: config.toolPrefix,
-    auth: config.auth,
-    servers: normalizeDefinedServers(config.servers),
+    auth: envResult?.auth ?? config.auth,
+    servers: envResult?.servers ?? normalizeDefinedServers(config.servers),
   };
+}
+
+function resolveEnvConfig(
+  envs: Record<string, EnvConfig> | undefined,
+  envName: string | undefined
+): { auth?: AuthConfig; servers?: DefinedServerConfig[] } | undefined {
+  if (!envs || Object.keys(envs).length === 0) {
+    return undefined;
+  }
+
+  const name = envName ?? Object.keys(envs)[0];
+  const entry = envs[name];
+  if (!entry) {
+    throw new Error(`Environment "${name}" not found in config. Available: ${Object.keys(envs).join(", ")}`);
+  }
+
+  const auth = buildAuthFromEnvConfig(entry);
+
+  return {
+    auth,
+    servers: [{ url: entry.url, ...(auth ? { auth } : {}) }],
+  };
+}
+
+function buildAuthFromEnvConfig(entry: EnvConfig): AuthConfig | undefined {
+  const authType = entry.auth_type;
+  if (!authType || authType === "none") {
+    return authType === "none" ? { type: "none" } : undefined;
+  }
+
+  if (authType === "bearer") {
+    return { type: "bearer", ...(entry.token ? { token: entry.token } : {}) };
+  }
+
+  if (authType === "basic") {
+    return {
+      type: "basic",
+      ...(entry.username ? { username: entry.username } : {}),
+      ...(entry.password ? { password: entry.password } : {}),
+    };
+  }
+
+  if (authType === "apikey") {
+    return {
+      type: "apikey",
+      ...(entry.apiKey ? { apiKey: entry.apiKey } : {}),
+      ...(entry.apiKeyHeader ? { apiKeyHeader: entry.apiKeyHeader } : {}),
+      ...(entry.apiKeyQueryParam ? { apiKeyQueryParam: entry.apiKeyQueryParam } : {}),
+    };
+  }
+
+  return undefined;
 }
 
 function parseConfigContent(content: string, source: string): RawServerConfigFile {

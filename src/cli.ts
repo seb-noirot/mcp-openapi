@@ -11,6 +11,7 @@ Usage: mcp-openapi [options] <openapi-path-or-url>
 
 Options:
   --config <path>           Path to a JSON/YAML config file
+  --env <name>              Environment to use from the config file's "envs" map
   --server <url>            Base URL to use (overrides servers from spec). Can be repeated.
   --server-index <n>        Index of server to use from spec/config (default: 0)
   --tool-prefix <prefix>    Prefix to add to built-in and generated tool names
@@ -37,6 +38,7 @@ Examples:
   mcp-openapi https://api.example.com/openapi.yaml --auth-type bearer --auth-token mytoken
   mcp-openapi ./spec.yaml --server https://api.example.com --auth-type basic --auth-username admin --auth-password secret
   mcp-openapi --config ./mcp-openapi.config.yaml
+  mcp-openapi --config ./mcp-openapi.config.yaml --env dev
 `);
 }
 
@@ -46,12 +48,17 @@ function parseArgs(args: string[]): { config: ServerConfig } {
   let openApiPath: string | undefined;
   let configPath: string | undefined;
   let toolPrefix: string | undefined;
+  let envName: string | undefined;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--config" && i + 1 < args.length) {
       configPath = consumeArgValue(args, ++i, "--config");
     } else if (args[i] === "--config") {
       throw new Error("Missing value for --config");
+    } else if (args[i] === "--env" && i + 1 < args.length) {
+      envName = consumeArgValue(args, ++i, "--env");
+    } else if (args[i] === "--env") {
+      throw new Error("Missing value for --env");
     } else if (args[i] === "--server" && i + 1 < args.length) {
       servers.push(consumeArgValue(args, ++i, "--server"));
     } else if (args[i] === "--server") {
@@ -82,7 +89,7 @@ function parseArgs(args: string[]): { config: ServerConfig } {
     }
   }
 
-  const fileConfig = configPath ? loadConfigFile(configPath) : {};
+  const fileConfig = configPath ? loadConfigFile(configPath, envName) : {};
   const cliAuth = parseAuthConfig(args, {
     defaultToNone: false,
     includeEnvironment: false,

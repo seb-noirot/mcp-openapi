@@ -46,6 +46,7 @@ mcp-openapi [options] <openapi-path-or-url>
 
 Options:
   --config <path>             Path to a JSON/YAML config file
+  --env <name>                Environment to use from the config file's "envs" map
   --server <url>              Base URL to use (overrides servers from spec). Can be repeated.
   --server-index <n>          Index of server to use from spec/config (default: 0)
   --tool-prefix <prefix>      Prefix to add to built-in and generated tool names
@@ -121,6 +122,57 @@ servers:
 ```bash
 npx mcp-openapi --config ./mcp-openapi.config.yaml
 ```
+
+### Multi-environment config file
+
+Use the `envs` key to define named environments, each with its own URL and authentication. The active environment is selected by the `env` key in the file or the `--env` CLI flag (which takes precedence).
+
+```json
+{
+  "openApiPath": "./openapi.yaml",
+  "env": "dev",
+  "envs": {
+    "dev": {
+      "url": "https://dev.api.example.com",
+      "auth_type": "bearer",
+      "token": "DEV_TOKEN"
+    },
+    "staging": {
+      "url": "https://staging.api.example.com",
+      "auth_type": "bearer",
+      "token": "STAGING_TOKEN"
+    },
+    "prod": {
+      "url": "https://api.example.com",
+      "auth_type": "bearer",
+      "token": "PROD_TOKEN"
+    }
+  }
+}
+```
+
+```bash
+# Use the default env ("dev") defined in the file
+npx mcp-openapi --config ./mcp-openapi.config.json
+
+# Override to use the "prod" environment
+npx mcp-openapi --config ./mcp-openapi.config.json --env prod
+```
+
+Each environment entry supports all auth types:
+
+| Field             | Description                                         |
+|-------------------|-----------------------------------------------------|
+| `url`             | Base URL for this environment (required)            |
+| `auth_type`       | `none` \| `basic` \| `bearer` \| `apikey`           |
+| `token`           | ****** (for `bearer`)                         |
+| `username`        | Username (for `basic`)                              |
+| `password`        | Password (for `basic`)                              |
+| `apiKey`          | API key value (for `apikey`)                        |
+| `apiKeyHeader`    | Header name for API key (for `apikey`)              |
+| `apiKeyQueryParam`| Query param name for API key (for `apikey`)         |
+
+If no `env` key is present in the file and no `--env` flag is given, the **first** environment in the `envs` map is used.
 
 ### API key in a header
 

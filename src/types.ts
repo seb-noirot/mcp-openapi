@@ -12,6 +12,17 @@ export interface AuthConfig {
   apiKeyQueryParam?: string;
 }
 
+export interface EnvConfig {
+  url: string;
+  auth_type?: "none" | "basic" | "bearer" | "apikey";
+  username?: string;
+  password?: string;
+  token?: string;
+  apiKey?: string;
+  apiKeyHeader?: string;
+  apiKeyQueryParam?: string;
+}
+
 export interface DefinedServerConfig {
   url: string;
   name?: string;
