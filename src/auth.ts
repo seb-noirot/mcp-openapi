@@ -84,8 +84,26 @@ function applyRetryInterceptor(
   maxRetries: number,
   retryOn: number[]
 ): void {
+  const shouldRetryResponse = (status: number | undefined, attempt: number): boolean => {
+    if (attempt >= maxRetries) return false;
+    // If retryOn is non-empty, only retry on those specific status codes
+    return retryOn.length > 0 && status !== undefined && retryOn.includes(status);
+  };
+
   instance.interceptors.response.use(
-    (response) => response,
+    async (response) => {
+      // Handle success responses that should be retried (e.g. 429 when retryOn is set)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const cfg = response.config as any;
+      const attempt: number = cfg.__retryAttempt ?? 0;
+      if (shouldRetryResponse(response.status, attempt)) {
+        cfg.__retryAttempt = attempt + 1;
+        const delay = Math.pow(2, attempt) * 200;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        return instance.request(cfg);
+      }
+      return response;
+    },
     async (error: unknown) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const axiosError = error as any;
@@ -93,11 +111,8 @@ function applyRetryInterceptor(
       if (!config) return Promise.reject(error);
 
       const attempt: number = config.__retryAttempt ?? 0;
-      const status: number | undefined = axiosError?.response?.status;
-
-      const shouldRetry =
-        attempt < maxRetries &&
-        (retryOn.length === 0 || (status !== undefined && retryOn.includes(status)));
+      // For network/timeout errors, retry when retryOn is empty (retry on any error)
+      const shouldRetry = attempt < maxRetries && retryOn.length === 0;
 
       if (!shouldRetry) return Promise.reject(error);
 
